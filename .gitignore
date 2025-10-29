@@ -37,3 +37,11 @@ env/
 *.tmp
 *.bak
 *.backup
+
+# Private/Unreleased Projects
+# These are version controlled locally but not pushed to GitHub
+original-hothouse-projects/flux-hothouse/
+tools/daisy-agent/
+
+# Placeholder for future private ports (uncomment when created)
+# funbox-to-hothouse-ports/[future-port-name]/
