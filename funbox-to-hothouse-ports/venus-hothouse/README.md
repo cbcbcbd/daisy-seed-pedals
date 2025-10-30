@@ -5,36 +5,20 @@ Spectral reverb with shimmer, drift modulation, and detune capabilities. FFT-bas
 ## Quick Start
 
 ### For Users (Pre-built Binary)
-1. Download  from binary/ directory
+1. Download `venus_hothouse_v1.0.bin` from binary/ directory
 2. Connect Hothouse via USB-C
 3. Enter DFU mode: Hold BOOT, press/release RESET, release BOOT
 4. Open [Daisy Web Programmer](https://electro-smith.github.io/Programmer/)
 5. Load and flash the binary (Chrome/Edge only)
 
 ### For Developers (Build from Source)
-Setting up Darwin Shell
-]0;cbrandt@CBCBD.local: /Users/cbrandt/Desktop/+DEVELOPMENT+/daisy-seed-pedals/funbox-to-hothouse-ports/venus-hothousetotal 0
-drwxrwxr-x   5 cbrandt  staff  160 Oct 29 20:07 .
-drwxrwxr-x   3 cbrandt  staff   96 Oct 29 19:39 ..
-drwxrwxr-x   3 cbrandt  staff   96 Oct 29 20:00 binary
--rw-rw-r--   1 cbrandt  staff    0 Oct 29 20:07 README
-drwxrwxr-x  14 cbrandt  staff  448 Oct 29 19:59 src
-]0;cbrandt@CBCBD.local: /Users/cbrandt/Desktop/+DEVELOPMENT+/daisy-seed-pedals/funbox-to-hothouse-ports/venus-hothousetotal 0
-drwxrwxr-x   5 cbrandt  staff  160 Oct 29 20:07 .
-drwxrwxr-x   3 cbrandt  staff   96 Oct 29 19:39 ..
-drwxrwxr-x   3 cbrandt  staff   96 Oct 29 20:00 binary
--rw-rw-r--   1 cbrandt  staff    0 Oct 29 20:07 README
-drwxrwxr-x  14 cbrandt  staff  448 Oct 29 19:59 src
-]0;cbrandt@CBCBD.local: /Users/cbrandt/Desktop/+DEVELOPMENT+/daisy-seed-pedals/funbox-to-hothouse-ports/venus-hothouseSetting up Darwin Shell
-]0;cbrandt@CBCBD.local: /Users/cbrandt/Desktop/+DEVELOPMENT+/daisy-seed-pedals/funbox-to-hothouse-ports/venus-hothousetotal 0
-drwxrwxr-x   5 cbrandt  staff  160 Oct 29 20:07 .
-drwxrwxr-x   3 cbrandt  staff   96 Oct 29 19:39 ..
-drwxrwxr-x   3 cbrandt  staff   96 Oct 29 20:00 binary
--rw-rw-r--   1 cbrandt  staff    0 Oct 29 20:07 README
-drwxrwxr-x  14 cbrandt  staff  448 Oct 29 19:59 src
-]0;cbrandt@CBCBD.local: /Users/cbrandt/Desktop/+DEVELOPMENT+/daisy-seed-pedals/funbox-to-hothouse-ports/venus-hothouse]0;cbrandt@CBCBD.local: /Users/cbrandt/Desktop/+DEVELOPMENT+/daisy-seed-pedals/funbox-to-hothouse-ports/venus-hothouse
+```bash
+cd funbox-to-hothouse-ports/venus-hothouse/src/
+make clean
+make
+```
 
-See  for detailed setup instructions.
+See `src/BUILD_INSTRUCTIONS.md` for detailed setup instructions.
 
 ## Hardware Controls
 
@@ -97,6 +81,6 @@ See  for detailed setup instructions.
 MIT License - See LICENSE file in src/ directory for details.
 
 ## Documentation
-- **Complete Controls Reference**: 
-- **Build Instructions**: 
-- **Source Code Documentation**: 
+- **Complete Controls Reference**: `src/CONTROLS_REFERENCE.md`
+- **Build Instructions**: `src/BUILD_INSTRUCTIONS.md`
+- **Source Code Documentation**: `src/README.md`
