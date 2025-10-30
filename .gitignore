@@ -41,9 +41,23 @@ env/
 # Private/Unreleased Projects
 # These are version controlled locally but not pushed to GitHub
 original-hothouse-projects/flux-hothouse/
-tools/daisy-agent/
+original-hothouse-projects/tremodulay-hothouse/
+original-hothouse-projects/ambien-hothouse/
 
 # Placeholder for future private ports (uncomment when created)
 # funbox-to-hothouse-ports/[future-port-name]/
-original-hothouse-projects/tremodulay-hothouse/
-original-hothouse-projects/ambien-hothouse/
+
+# daisy-agent tool excludes
+# Note: Source code in tools/daisy-agent/ IS tracked
+# Only exclude build artifacts and user data
+tools/daisy-agent/venv/
+tools/daisy-agent/.pytest_cache/
+tools/daisy-agent/__pycache__/
+tools/daisy-agent/**/__pycache__/
+tools/daisy-agent/*.pyc
+tools/daisy-agent/**/*.pyc
+tools/daisy-agent/knowledge.db
+tools/daisy-agent/knowledge.db.backup
+tools/daisy-agent/handoffs/
+tools/daisy-agent/.DS_Store
+tools/daisy-agent/**/.DS_Store
