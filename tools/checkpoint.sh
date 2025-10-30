@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # checkpoint.sh - Create git checkpoint for private projects
-# Usage: ./checkpoint.sh <project> <message> [--build] [--tag version]
+# Usage: ./tools/checkpoint.sh <project> <message> [--build] [--tag version]
 
 set -e
 
@@ -19,13 +19,13 @@ BUILD=false
 TAG=""
 
 if [ -z "$PROJECT" ] || [ -z "$MESSAGE" ]; then
-    echo -e "${RED}Usage: ./checkpoint.sh <project> <message> [--build] [--tag version]${NC}"
+    echo -e "${RED}Usage: ./tools/checkpoint.sh <project> <message> [--build] [--tag version]${NC}"
     echo ""
     echo "Projects: flux, tremodulay, ambien, buzzbox"
     echo ""
     echo "Examples:"
-    echo "  ./checkpoint.sh flux \"working delay sync\""
-    echo "  ./checkpoint.sh flux \"v1.2 release\" --build --tag v1.2"
+    echo "  ./tools/checkpoint.sh flux \"working delay sync\""
+    echo "  ./tools/checkpoint.sh flux \"v1.2 release\" --build --tag v1.2"
     exit 1
 fi
 
