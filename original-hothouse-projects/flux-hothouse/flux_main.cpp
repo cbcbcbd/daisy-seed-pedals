@@ -4,9 +4,11 @@
 #include <stdlib.h>  // For rand() and srand()
 #include <cmath>     // For logf()
 
+// Dust is included in daisysp.h - no separate include needed
+
 //
 // FLUX v3.0 - Sample & Hold Slicer Delay
-// Phase 2 + Phase 5 Lo-Fi Integration
+// Phase 2 + Phase 5 Lo-Fi Integration (with Dust)
 //
 // PHASE 1 (COMPLETE):
 // ✅ Hardware initialization
@@ -33,12 +35,24 @@
 // ✅ Variable crossfade system (15% with 5ms minimum)
 // ✅ Read/write conflict protection
 //
-// PHASE 5 (NEW - LO-FI INTEGRATION):
-// ✅ Custom bit crushing (sample rate reduction + low-pass filter)
-// ✅ Applied to input BEFORE capture (affects dry and captured slices)
-// ✅ lofi_bitcrush = 0.0 completely bypasses processing (no overhead)
+// PHASE 5 (UPDATED - LO-FI INTEGRATION):
+// ✅ Custom bit crushing (sample rate reduction + aggressive low-pass filter)
+// ✅ Dust noise (sparse impulses for vinyl crackle character)
+// ✅ Wobble/flutter (LFO-modulated delay for tape wow/uni-vibe character)
+// ✅ Bit crush applied to input BEFORE capture (vintage sampler aesthetic)
+// ✅ Wobble applied AFTER dry/wet mix (tape flutter on mixed signal)
+// ✅ Dust applied AFTER wobble (vinyl-on-top aesthetic)
+// ✅ lofi_bitcrush = 0.0 completely bypasses bit crushing (no overhead)
+// ✅ lofi_wobble = 0.0 completely bypasses wobble (no overhead)
+// ✅ lofi_noise = 0.0 completely bypasses dust (no overhead)
 // ✅ Toggle 3 DOWN enables lo-fi mode (BuzzBox pattern)
 // ✅ Touch detection for K3-K6 parameters
+//
+// Lo-Fi Mode Controls (Toggle 3 DOWN):
+// - K3: Wobble (0-100% - tape wow/flutter, uni-vibe character)
+// - K4: Dust/Crackle (0-100% - controls both density and mix)
+// - K5: Bit Crush (0-100% sample rate reduction)
+// - K6: AGE mix (placeholder for future)
 //
 // Platform: Cleveland Music Co. Hothouse
 // Development Stage: DEBUG
@@ -104,6 +118,11 @@ int targetRepeats = 1;
 
 CrossFade mix;
 OnePole lofi_filter;  // Low-pass filter for lo-fi downsampling
+OnePole dust_filter;  // Low-pass filter to soften dust crackle
+Dust dust;            // Sparse random impulses for vinyl crackle
+DelayLine<float, 4800> wobble_delay;  // 100ms max delay for wobble (@ 48kHz)
+Oscillator wobble_lfo;  // LFO for tape wow/flutter modulation
+AdEnv envelope_follower;  // Envelope follower for dynamic slice control
 
 // ============================================================================
 // CONTROL STATE
@@ -122,6 +141,8 @@ float knob_stutter;
 
 // Toggle values
 int toggle_mode;  // Toggle 1 - Capture/Playback mode
+int toggle2_mode;  // Toggle 2 - Envelope direction
+int prev_toggle3_pos = 0;  // Track Toggle 3 position changes
 
 // Touch detection (BuzzBox pattern)
 float knobValues[6] = {0.0f};
@@ -135,6 +156,12 @@ float lofi_wobble;
 float lofi_noise;
 float lofi_bitcrush;
 float lofi_age_mix;
+
+// Envelope Mode control variables
+float env_amount;
+float env_attack;
+float env_release;
+float envelope_value = 0.0f;
 
 // Processed parameters
 int active_slice_count;
@@ -161,10 +188,10 @@ float CustomBitCrush(float input, float amount)
     // 1.0 = heavy downsample (32 sample hold)
     int downsample_rate = 1 + (int)(amount * amount * 31.0f);  // 1 to 32 samples
     
-    // Set filter cutoff based on effective sample rate
+    // Set filter cutoff based on effective sample rate - MORE AGGRESSIVE
     // Nyquist frequency = (48000 / downsample_rate) / 2
     float effective_nyquist = (48000.0f / (float)downsample_rate) / 2.0f;
-    float cutoff = effective_nyquist * 0.8f;  // 80% of Nyquist for safety
+    float cutoff = effective_nyquist * 0.5f;  // 50% of Nyquist for aggressive lo-fi character
     if (cutoff > 18000.0f) cutoff = 18000.0f;
     if (cutoff < 500.0f) cutoff = 500.0f;
     lofi_filter.SetFrequency(cutoff);
@@ -207,6 +234,24 @@ void UpdateControls()
     
     // Check if we're in shift mode (Toggle 3 DOWN = Lo-Fi Mode)
     int toggle3_pos = hw.GetToggleswitchPosition(Hothouse::TOGGLESWITCH_3);
+    
+    // Detect Toggle 3 position change - reset touch flags (BuzzBox pattern)
+    if (toggle3_pos != prev_toggle3_pos) {
+        prev_toggle3_pos = toggle3_pos;
+        
+        // Reset touch flags for K3-K6 so parameters don't jump on mode switch
+        knob_touched[2] = false;
+        knob_touched[3] = false;
+        knob_touched[4] = false;
+        knob_touched[5] = false;
+        
+        // Capture current knob positions so we can detect movement from here
+        knob_prev[2] = knobValues[2];
+        knob_prev[3] = knobValues[3];
+        knob_prev[4] = knobValues[4];
+        knob_prev[5] = knobValues[5];
+    }
+    
     shift_mode = (toggle3_pos == 2);
     
     // Read Toggle 1 for capture/playback mode
@@ -255,8 +300,8 @@ void UpdateLEDs()
     // LED1 - Effect active
     led1.Set(bypass ? 0.0f : 1.0f);
     
-    // LED2 - Shift mode indicator
-    led2.Set(shift_mode ? 1.0f : 0.0f);
+    // LED2 - Reserved for future use
+    led2.Set(0.0f);
     
     led1.Update();
     led2.Update();
@@ -287,54 +332,49 @@ void ProcessParameters()
 // K6 STUTTER SYSTEM
 // ============================================================================
 
-int CalculateRepeatCount(float k6_value) {
-    if (k6_value < 0.01f) return 1;
-    
-    float random_val = (float)(rand() % 10000) / 10000.0f;
-    
-    if (k6_value < 0.25f) {
-        return (random_val < 0.95f) ? 1 : 2;
-    } else if (k6_value < 0.50f) {
-        if (random_val < 0.60f) return 1;
-        if (random_val < 0.90f) return 2;
-        return 4;
-    } else if (k6_value < 0.75f) {
-        if (random_val < 0.30f) return 1;
-        if (random_val < 0.70f) return 2;
-        if (random_val < 0.90f) return 4;
-        return 8;
-    } else {
-        if (random_val < 0.10f) return 1;
-        if (random_val < 0.40f) return 2;
-        if (random_val < 0.70f) return 4;
-        return 8;
+int CalculateRepeatCount(float stutter_knob)
+{
+    if (stutter_knob < 0.01f) {
+        return 1;
     }
-}
-
-int GetNextSlice(int current, int sliceCount, float k6_value, int mode, bool& reverseFlag) {
-    float random_val = (float)(rand() % 10000) / 10000.0f;
     
-    bool doShuffle = (random_val < k6_value);
+    float shuffle_probability = stutter_knob;
     
-    int nextSlice;
-    
-    if (doShuffle) {
-        nextSlice = rand() % sliceCount;
-    } else {
-        if (mode == 0) {
-            nextSlice = (current + 1) % sliceCount;
-        } else if (mode == 1) {
-            nextSlice = (current - 1 + sliceCount) % sliceCount;
+    if ((rand() % 100) < (int)(shuffle_probability * 100.0f)) {
+        int subdivision_choice = rand() % 100;
+        
+        if (subdivision_choice < 40) {
+            return 2;
+        } else if (subdivision_choice < 70) {
+            return 4;
+        } else if (subdivision_choice < 90) {
+            return 1;
         } else {
-            nextSlice = (current + 1) % sliceCount;
+            return 8;
         }
     }
     
-    if (mode == 2) {
+    return 1;
+}
+
+int GetNextSlice(int currentSlice, int sliceCount, float stutterKnob, int toggleMode, bool& reverseFlag)
+{
+    int nextSlice;
+    
+    if (toggleMode == 2) {
+        nextSlice = rand() % sliceCount;
         reverseFlag = (rand() % 2) == 0;
-    } else if (mode == 1) {
+    } else if (toggleMode == 1) {
+        nextSlice = currentSlice - 1;
+        if (nextSlice < 0) {
+            nextSlice = sliceCount - 1;
+        }
         reverseFlag = true;
     } else {
+        nextSlice = currentSlice + 1;
+        if (nextSlice >= sliceCount) {
+            nextSlice = 0;
+        }
         reverseFlag = false;
     }
     
@@ -557,28 +597,80 @@ static void AudioCallback(AudioHandle::InputBuffer in,
         fonepole(slice_length_samples_smooth, (float)slice_length_samples, 0.0002f);
         
         float input = in[0][i];
+        float dry_input = input;  // Preserve original for dry signal
         
         float output;
         
         if (!bypass) {
             // Apply lo-fi bit crushing to input BEFORE capture
+            // This affects what gets captured into slices (vintage sampler aesthetic)
             // CRITICAL: When lofi_bitcrush = 0, CustomBitCrush returns input unchanged
-            input = CustomBitCrush(input, lofi_bitcrush);
+            float processed_input = CustomBitCrush(input, lofi_bitcrush);
             
             // Read from playback engine
             float wet = PlaybackSlice();
             
-            // Apply feedback
-            float capture_input = input + (wet * feedback_amount);
+            // Apply feedback using processed input
+            float capture_input = processed_input + (wet * feedback_amount);
             
             // Capture with feedback applied
             CaptureSlice(capture_input);
             
-            // Dry/wet mix
+            // Dry/wet mix using CLEAN dry signal and processed wet
             mix.SetPos(knob_mix);
-            output = mix.Process(input, wet);
+            output = mix.Process(dry_input, wet);
             
-            // Apply master level
+            // Apply wobble AFTER mix (tape wow/flutter / uni-vibe character)
+            // Wobble runs whenever lofi_wobble > 0 AND mix > 0
+            // Creates pitch modulation via LFO-modulated delay
+            if (lofi_wobble > 0.0f && knob_mix > 0.01f) {
+                // LFO rate: 0.5Hz to 6Hz with curve for musical control
+                // Low settings = slow tape drift, high settings = vibrato/uni-vibe
+                float lfo_rate = 0.5f + (lofi_wobble * lofi_wobble * 5.5f);  // 0.5Hz to 6Hz
+                wobble_lfo.SetFreq(lfo_rate);
+                
+                // Get LFO value (-1.0 to 1.0)
+                float lfo_value = wobble_lfo.Process();
+                
+                // Map to delay time: 2ms to 8ms range for noticeable pitch movement
+                // Progressive depth - more wobble at higher settings
+                float delay_depth_ms = 2.0f + (lofi_wobble * 6.0f);  // 2ms to 8ms
+                float center_delay_ms = 5.0f;  // Center point
+                float delay_time_ms = center_delay_ms + (lfo_value * delay_depth_ms * 0.5f);
+                
+                // Convert to samples
+                float delay_samples = (delay_time_ms / 1000.0f) * SAMPLE_RATE;
+                wobble_delay.SetDelay(delay_samples);
+                
+                // Write current output to delay
+                wobble_delay.Write(output);
+                
+                // Read modulated signal
+                float wobbled = wobble_delay.Read();
+                
+                // Reduced maximum mix for more usable knob range
+                // Max 50% wet instead of 100% - keeps more of the original character
+                float wobble_mix = lofi_wobble * lofi_wobble * 0.5f;  // Max 50% at full knob
+                output = output * (1.0f - wobble_mix) + wobbled * wobble_mix;
+            }
+            
+            // Apply dust AFTER wobble, BEFORE master level (vinyl-on-top aesthetic)
+            // Dust runs whenever lofi_noise > 0 AND mix > 0, regardless of toggle position
+            // This way dust only appears on the wet signal - dry signal stays completely clean
+            if (lofi_noise > 0.0f && knob_mix > 0.01f) {
+                // Very conservative density: 0-2% range with progressive curve
+                float density = lofi_noise * lofi_noise * 0.02f;  // Squared curve, max 2%
+                dust.SetDensity(density);
+                
+                float dust_signal = dust.Process();  // 0.0 to 1.0, sparse impulses
+                dust_signal = dust_filter.Process(dust_signal);  // 600Hz filter for warmth
+                
+                // Progressive mix: starts very subtle, ramps up
+                float mix_amount = lofi_noise * lofi_noise * 0.05f;  // Max 5% mix
+                output += (dust_signal - 0.5f) * mix_amount;
+            }
+            
+            // Apply master level (controls everything: mix + dust)
             output *= master_level;
             
         } else {
@@ -609,6 +701,20 @@ int main(void)
     // Initialize lo-fi filter
     lofi_filter.Init();
     lofi_filter.SetFrequency(8000.0f);
+    
+    // Initialize dust filter (very low frequency for warm vinyl character)
+    dust_filter.Init();
+    dust_filter.SetFrequency(600.0f);  // Warm vinyl character
+    
+    // Initialize dust for lo-fi crackle
+    dust.Init();
+    
+    // Initialize wobble effect
+    wobble_delay.Init();
+    wobble_lfo.Init(SAMPLE_RATE);
+    wobble_lfo.SetWaveform(Oscillator::WAVE_SIN);  // Smooth sine wave for natural tape flutter
+    wobble_lfo.SetFreq(1.0f);  // Default 1Hz
+    wobble_lfo.SetAmp(1.0f);
     
     bypass = true;
     shift_mode = false;
