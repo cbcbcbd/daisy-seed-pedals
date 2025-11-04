@@ -7,61 +7,173 @@
 // Dust is included in daisysp.h - no separate include needed
 
 //
-// FLUX v3.0 - Sample & Hold Slicer Delay
-// Phase 2 + Phase 5 Lo-Fi Integration (with Dust)
+// Ambien Flux v1.0 - Sample & Hold Slicer Delay
+// 
+// Transform your guitar into a glitch machine. Ambien Flux captures discrete 
+// audio slices and plays them back with controllable repetition, randomization,
+// and lo-fi processing. Freeze moments in time and manipulate them rhythmically.
 //
-// PHASE 1 (COMPLETE):
-// ✅ Hardware initialization
-// ✅ Bypass switching
-// ✅ LED indicators
-// ✅ Control processing structure
-// ✅ Bootloader entry
-// ✅ Slice buffer array structure
-// ✅ K2: DRY/WET MIX (0-100%)
-// ✅ K3: FEEDBACK (0-100%)
-// ✅ K4: SLICE COUNT (1-16)
-// ✅ K5: SLICE LENGTH (100-500ms with log curve)
+// ============================================================================
+// CONTROLS
+// ============================================================================
 //
-// PHASE 2 (COMPLETE):
-// ✅ K6: STUTTER control (0-100%)
-// ✅ Shuffle probability (0-100% based on K6)
-// ✅ Musical subdivision repeats (1x, 2x, 4x, 8x)
-// ✅ Random number generator seeded with system time
-// ✅ Zero-crossing detection for click-free slicing
-// ✅ TOGGLE 1: Capture/Playback Modes
-//     - UP: Forward slice sequence, forward playback direction
-//     - MIDDLE: Backward slice sequence, reverse playback direction  
-//     - DOWN: Forward slice sequence, RANDOM playback direction per slice
-// ✅ Variable crossfade system (15% with 5ms minimum)
-// ✅ Read/write conflict protection
+// KNOBS (Always Active):
+// - K1: MASTER LEVEL (0-200% / 0dB to +6dB)
+// - K2: DRY/WET MIX (0-100%)
 //
-// PHASE 5 (UPDATED - LO-FI INTEGRATION):
-// ✅ Custom bit crushing (sample rate reduction + aggressive low-pass filter)
-// ✅ Dust noise (sparse impulses for vinyl crackle character)
-// ✅ Wobble/flutter (LFO-modulated delay for tape wow/uni-vibe character)
-// ✅ Bit crush applied to input BEFORE capture (vintage sampler aesthetic)
-// ✅ Wobble applied AFTER dry/wet mix (tape flutter on mixed signal)
-// ✅ Dust applied AFTER wobble (vinyl-on-top aesthetic)
-// ✅ lofi_bitcrush = 0.0 completely bypasses bit crushing (no overhead)
-// ✅ lofi_wobble = 0.0 completely bypasses wobble (no overhead)
-// ✅ lofi_noise = 0.0 completely bypasses dust (no overhead)
-// ✅ Toggle 3 DOWN enables lo-fi mode (BuzzBox pattern)
-// ✅ Touch detection for K3-K6 parameters
+// TOGGLE 3 UP - Normal Mode:
+// - K3: FEEDBACK (0-100% - pattern regeneration)
+// - K4: SLICE COUNT (1-16 slices per cycle)
+// - K5: SLICE LENGTH (100-500ms with logarithmic curve)
+// - K6: STUTTER (0-100% - random repetition/glitch probability)
 //
-// Lo-Fi Mode Controls (Toggle 3 DOWN):
-// - K3: Wobble (0-100% - tape wow/flutter, uni-vibe character)
-// - K4: Dust/Crackle (0-100% - controls both density and mix)
-// - K5: Bit Crush (0-100% sample rate reduction)
-// - K6: AGE mix (placeholder for future)
+// TOGGLE 3 DOWN - Lo-Fi Mode:
+// - K3: WOBBLE (0-100% - tape wow/flutter/uni-vibe character)
+// - K4: DUST (0-100% - vinyl crackle density & mix)
+// - K5: BIT CRUSH (0-100% - sample rate reduction)
+// - K6: (Unused - reserved for future expansion)
 //
+// TOGGLE 1 - Capture/Playback Modes:
+// - UP: Forward capture → Forward playback
+// - MIDDLE: Backward capture → Reverse playback
+// - DOWN: Forward capture → Random playback direction per slice
+//
+// TOGGLE 2 - (Unused - reserved for future expansion)
+// TOGGLE 3 MIDDLE - (Unused - reserved for future expansion)
+//
+// FOOTSWITCHES:
+// - FS1 TAP: Toggle bypass on/off
+// - FS1 HOLD (2 seconds): Enter bootloader for firmware updates
+// - FS2 TAP: Toggle freeze (stops capture, loops current buffer)
+//
+// LEDS:
+// - LED1: Effect active (on when not bypassed)
+// - LED2: Freeze active (on when frozen)
+//
+// ============================================================================
+// FEATURES
+// ============================================================================
+//
+// CORE SLICING:
+// - Sample & hold architecture (discrete buffer capture)
+// - 1-16 variable slice count
+// - 100-500ms slice length range
+// - Zero-crossing detection for click-free transitions
+// - Variable crossfade system (15% proportional, 5ms minimum)
+// - Read/write conflict protection
+//
+// PLAYBACK MODES:
+// - Forward sequence with forward playback
+// - Backward sequence with reverse playback
+// - Random playback direction per slice
+//
+// STUTTER SYSTEM:
+// - Shuffle probability (0-100%)
+// - Musical subdivision repeats (1x, 2x, 4x, 8x)
+// - Random slice selection based on stutter amount
+//
+// LO-FI EFFECTS:
+// - Bit crushing: Sample rate reduction with aggressive 50% Nyquist low-pass
+// - Wobble: LFO-modulated delay (0.5-6Hz) for tape wow/flutter/uni-vibe
+// - Dust: Sparse vinyl crackle (0-2% density, 600Hz low-pass, progressive mix)
+//
+// SIGNAL FLOW:
+// INPUT → [Bit Crush] → Capture → Slices → Playback
+//    ↓                                        ↓
+//  Clean Dry                          Processed Wet
+//    ↓                                        ↓
+//    └────────→ [Dry/Wet Mix] ←──────────────┘
+//                     ↓
+//                 [Wobble]
+//                     ↓
+//                  [Dust]
+//                     ↓
+//              [Master Level]
+//                     ↓
+//                  OUTPUT
+//
+// FREEZE MODE:
+// - Stops new audio capture
+// - Continues playback of frozen buffer
+// - All controls remain active (feedback, mix, stutter, playback modes)
+// - Build layers with feedback on frozen content
+//
+// ============================================================================
+// TECHNICAL SPECIFICATIONS
+// ============================================================================
+//
+// Platform: Cleveland Music Co. Hothouse (Daisy Seed)
+// Sample Rate: 48 kHz
+// Bit Depth: 32-bit float internal processing
+// Buffer Memory: 16 slices × 24,000 samples (500ms max)
+// CPU: STM32H750 @ 480MHz
+// Latency: <5ms (buffer-dependent)
+//
+// ============================================================================
+// CREDITS
+// ============================================================================
+//
+// Design & Development: Chris Brandt
 // Platform: Cleveland Music Co. Hothouse
-// Development Stage: DEBUG
-// Architecture: Sample & Hold (discrete buffer capture)
+// DSP Library: Electro-Smith DaisySP
+// Development Tool: Claude.ai
+// License: MIT
+//
 //
 
 using namespace daisy;
 using namespace daisysp;
 using namespace clevelandmusicco;
+
+// ============================================================================
+// ENVELOPE FOLLOWER CLASS - OPTIONAL FEATURE (CURRENTLY DISABLED)
+// ============================================================================
+// This envelope follower system is fully implemented but commented out.
+// It would add dynamic control of slice length & count based on playing dynamics.
+// 
+// To enable:
+// 1. Uncomment this class
+// 2. Uncomment envelope-related sections marked "ENVELOPE SYSTEM" below
+// 3. Adds Toggle 2 (envelope direction) and Toggle 3 MIDDLE (envelope parameters)
+//
+/*
+class EnvelopeFollower {
+public:
+    EnvelopeFollower() : envelope_level_(0.0f), samplerate_(48000.0f), 
+                         attack_coeff_(0.0f), release_coeff_(0.0f) {}
+    
+    void Init(float samplerate, float attack_ms, float release_ms) {
+        samplerate_ = samplerate;
+        setAttackRelease(attack_ms, release_ms);
+    }
+    
+    void setAttackRelease(float attack_ms, float release_ms) {
+        attack_coeff_ = 1.0f - expf(-1.0f / (attack_ms * samplerate_ / 1000.0f));
+        release_coeff_ = 1.0f - expf(-1.0f / (release_ms * samplerate_ / 1000.0f));
+    }
+    
+    float Process(float input) {
+        float input_level = fabsf(input);
+        
+        if (input_level > envelope_level_) {
+            envelope_level_ += attack_coeff_ * (input_level - envelope_level_);
+        } else {
+            envelope_level_ += release_coeff_ * (input_level - envelope_level_);
+        }
+        
+        return envelope_level_;
+    }
+    
+    float GetEnvelopeLevel() const { return envelope_level_; }
+    void Reset() { envelope_level_ = 0.0f; }
+
+private:
+    float envelope_level_;
+    float samplerate_;
+    float attack_coeff_;
+    float release_coeff_;
+};
+*/
 
 // ============================================================================
 // CONSTANTS & CONFIGURATION
@@ -122,14 +234,16 @@ OnePole dust_filter;  // Low-pass filter to soften dust crackle
 Dust dust;            // Sparse random impulses for vinyl crackle
 DelayLine<float, 4800> wobble_delay;  // 100ms max delay for wobble (@ 48kHz)
 Oscillator wobble_lfo;  // LFO for tape wow/flutter modulation
-AdEnv envelope_follower;  // Envelope follower for dynamic slice control
+
+// ENVELOPE SYSTEM - Uncomment to enable dynamic slice control
+// EnvelopeFollower envelope_follower;
 
 // ============================================================================
 // CONTROL STATE
 // ============================================================================
 
 bool bypass = true;
-bool shift_mode = false;  // Toggle 3 DOWN = lo-fi mode
+bool is_frozen = false;  // FS2 tap - latching freeze
 
 // Control values (0.0 - 1.0 from knobs)
 float knob_time;
@@ -141,8 +255,10 @@ float knob_stutter;
 
 // Toggle values
 int toggle_mode;  // Toggle 1 - Capture/Playback mode
-int toggle2_mode;  // Toggle 2 - Envelope direction
 int prev_toggle3_pos = 0;  // Track Toggle 3 position changes
+
+// ENVELOPE SYSTEM - Uncomment to enable
+// int toggle2_mode;  // Toggle 2 - Envelope direction (UP/MIDDLE/DOWN)
 
 // Touch detection (BuzzBox pattern)
 float knobValues[6] = {0.0f};
@@ -157,11 +273,11 @@ float lofi_noise;
 float lofi_bitcrush;
 float lofi_age_mix;
 
-// Envelope Mode control variables
-float env_amount;
-float env_attack;
-float env_release;
-float envelope_value = 0.0f;
+// ENVELOPE SYSTEM - Uncomment to enable
+// float env_amount;    // K3 in envelope mode
+// float env_attack;    // K4 in envelope mode
+// float env_release;   // K5 in envelope mode
+// float envelope_value = 0.0f;
 
 // Processed parameters
 int active_slice_count;
@@ -180,7 +296,7 @@ static int bitcrush_sample_counter = 0;
 
 float CustomBitCrush(float input, float amount)
 {
-    // CRITICAL: If amount is 0, completely bypass processing
+    // If amount is 0, bypass processing completely
     if (amount <= 0.0f) return input;
     
     // Map amount to downsample rate
@@ -232,7 +348,7 @@ void UpdateControls()
         }
     }
     
-    // Check if we're in shift mode (Toggle 3 DOWN = Lo-Fi Mode)
+    // Check Toggle 3 position (0=Normal, 1=Envelope, 2=Lo-Fi)
     int toggle3_pos = hw.GetToggleswitchPosition(Hothouse::TOGGLESWITCH_3);
     
     // Detect Toggle 3 position change - reset touch flags (BuzzBox pattern)
@@ -252,10 +368,13 @@ void UpdateControls()
         knob_prev[5] = knobValues[5];
     }
     
-    shift_mode = (toggle3_pos == 2);
+    int shift_mode = toggle3_pos;  // 0=Normal, 1=Envelope, 2=Lo-Fi
     
     // Read Toggle 1 for capture/playback mode
     toggle_mode = hw.GetToggleswitchPosition(Hothouse::TOGGLESWITCH_1);
+    
+    // ENVELOPE SYSTEM - Uncomment to enable
+    // toggle2_mode = hw.GetToggleswitchPosition(Hothouse::TOGGLESWITCH_2);
     
     // Map controls based on shift mode
     float k1 = knobValues[0];
@@ -269,7 +388,8 @@ void UpdateControls()
     master_level = k1 * 2.0f;  // 0.0 - 2.0 (0dB to +6dB)
     knob_mix = k2;
     
-    if (!shift_mode) {
+    // Toggle 3: UP = Normal Mode, DOWN = Lo-Fi Mode
+    if (shift_mode == 0) {
         // NORMAL MODE - Core slicing parameters
         if (knob_touched[2]) knob_feedback = k3;
         if (knob_touched[3]) knob_slice_count = k4;
@@ -280,9 +400,18 @@ void UpdateControls()
         // LO-FI MODE - Degradation effects
         if (knob_touched[2]) lofi_wobble = k3;
         if (knob_touched[3]) lofi_noise = k4;
-        if (knob_touched[4]) lofi_bitcrush = k5;  // CCW=0.0 (clean), CW=1.0 (crushed)
-        if (knob_touched[5]) lofi_age_mix = k6;
+        if (knob_touched[4]) lofi_bitcrush = k5;
     }
+    
+    // ENVELOPE SYSTEM - Uncomment to enable Toggle 3 MIDDLE mode
+    /*
+    else if (shift_mode == 1) {
+        // ENVELOPE MODE - Dynamic control parameters
+        if (knob_touched[2]) env_amount = k3;
+        if (knob_touched[3]) env_attack = k4;
+        if (knob_touched[4]) env_release = k5;
+    }
+    */
 }
 
 void UpdateButtons()
@@ -292,7 +421,10 @@ void UpdateButtons()
         bypass = !bypass;
     }
     
-    // FS2 - Reserved for FREEZE mode (Phase 6)
+    // FS2 - Freeze toggle (latching)
+    if (hw.switches[Hothouse::FOOTSWITCH_2].RisingEdge()) {
+        is_frozen = !is_frozen;
+    }
 }
 
 void UpdateLEDs()
@@ -300,8 +432,8 @@ void UpdateLEDs()
     // LED1 - Effect active
     led1.Set(bypass ? 0.0f : 1.0f);
     
-    // LED2 - Reserved for future use
-    led2.Set(0.0f);
+    // LED2 - Freeze indicator
+    led2.Set(is_frozen ? 1.0f : 0.0f);
     
     led1.Update();
     led2.Update();
@@ -309,13 +441,37 @@ void UpdateLEDs()
 
 void ProcessParameters()
 {
+    float base_slice_count = knob_slice_count;
+    float base_slice_length = knob_slice_length;
+    
+    // ENVELOPE SYSTEM - Uncomment to enable dynamic modulation
+    /*
+    if (toggle2_mode != 2 && env_amount > 0.01f) {
+        float env_mod = envelope_value;
+        if (toggle2_mode == 1) env_mod = 1.0f - env_mod;
+        
+        float count_mod = 1.0f + ((env_mod - 0.5f) * env_amount);
+        base_slice_count = base_slice_count * count_mod;
+        if (base_slice_count < 0.0f) base_slice_count = 0.0f;
+        if (base_slice_count > 1.0f) base_slice_count = 1.0f;
+        
+        float length_mod = 1.0f + ((env_mod - 0.5f) * env_amount);
+        base_slice_length = base_slice_length * length_mod;
+        if (base_slice_length < 0.0f) base_slice_length = 0.0f;
+        if (base_slice_length > 1.0f) base_slice_length = 1.0f;
+    }
+    */
+    
     // Map K4 to slice count (1-16)
-    active_slice_count = (int)(knob_slice_count * 15.999f) + 1;
+    active_slice_count = (int)(base_slice_count * 15.999f) + 1;
+    
+    // Map K4 to slice count (1-16)
+    active_slice_count = (int)(base_slice_count * 15.999f) + 1;
     if (active_slice_count < 1) active_slice_count = 1;
     if (active_slice_count > MAX_SLICES) active_slice_count = MAX_SLICES;
     
     // Map K5 to slice length (100-500ms) with logarithmic curve
-    float log_knob = logf(1.0f + 9.0f * knob_slice_length) / logf(10.0f);
+    float log_knob = logf(1.0f + 9.0f * base_slice_length) / logf(10.0f);
     slice_length_ms = MIN_SLICE_LENGTH_MS + 
                       (log_knob * (MAX_SLICE_LENGTH_MS - MIN_SLICE_LENGTH_MS));
     
@@ -409,6 +565,11 @@ void InitializeSliceBuffers()
 
 void CaptureSlice(float input)
 {
+    // Skip capture if frozen - keeps current buffer contents
+    if (is_frozen) {
+        return;
+    }
+    
     if (fabsf(input) > 0.01f) {
         hasLeftZero = true;
     }
@@ -597,14 +758,26 @@ static void AudioCallback(AudioHandle::InputBuffer in,
         fonepole(slice_length_samples_smooth, (float)slice_length_samples, 0.0002f);
         
         float input = in[0][i];
-        float dry_input = input;  // Preserve original for dry signal
+        float dry_input = input;
+        
+        // ENVELOPE SYSTEM - Uncomment to enable
+        /*
+        if (toggle2_mode != 2) {
+            float attack_time = 1.0f + (env_attack * 199.0f);
+            float release_time = 10.0f + (env_release * 990.0f);
+            envelope_follower.setAttackRelease(attack_time, release_time);
+            envelope_value = envelope_follower.Process(input);
+        } else {
+            envelope_value = 0.5f;
+        }
+        */
         
         float output;
         
         if (!bypass) {
             // Apply lo-fi bit crushing to input BEFORE capture
             // This affects what gets captured into slices (vintage sampler aesthetic)
-            // CRITICAL: When lofi_bitcrush = 0, CustomBitCrush returns input unchanged
+            // When lofi_bitcrush = 0, CustomBitCrush returns input unchanged
             float processed_input = CustomBitCrush(input, lofi_bitcrush);
             
             // Read from playback engine
@@ -716,8 +889,11 @@ int main(void)
     wobble_lfo.SetFreq(1.0f);  // Default 1Hz
     wobble_lfo.SetAmp(1.0f);
     
+    // ENVELOPE SYSTEM - Uncomment to enable
+    // envelope_follower.Init(SAMPLE_RATE, 50.0f, 100.0f);
+    
     bypass = true;
-    shift_mode = false;
+    is_frozen = false;
     
     knob_time = 0.0f;
     knob_mix = 0.5f;
@@ -726,6 +902,9 @@ int main(void)
     knob_slice_length = 0.4f;
     knob_stutter = 0.0f;
     toggle_mode = 0;
+    
+    // ENVELOPE SYSTEM - Uncomment to enable
+    // toggle2_mode = 2;
     
     // Initialize touch detection
     for (int i = 0; i < 6; i++) {

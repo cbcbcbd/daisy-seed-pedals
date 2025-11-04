@@ -1,8 +1,8 @@
 # Project Name
-TARGET = flux
+TARGET = ambien_flux
 
 # Sources
-CPP_SOURCES = flux_main.cpp hothouse.cpp
+CPP_SOURCES = ambien_flux.cpp hothouse.cpp
 
 # Library Locations (git repository structure)
 LIBDAISY_DIR = ../../libDaisy
