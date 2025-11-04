@@ -12,7 +12,7 @@ Original projects from GuitarML Funbox, ported to Hothouse:
 
 ### Original Hothouse Projects
 - **[BuzzBox](original-hothouse-projects/buzzbox-hothouse/)** - Aggressive fuzz with envelope filter and octave
-- **[FLUX](original-hothouse-projects/flux-hothouse/)** - Modulated slicer delay (in development)
+- **[Ambien Flux](original-hothouse-projects/ambien-flux-hothouse/)** - Modulated slicer delay with modulation and Lo-Fi effects
 
 ## 🚀 Starter Kit for Building Your Own Pedals
 
