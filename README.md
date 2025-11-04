@@ -14,6 +14,22 @@ Original projects from GuitarML Funbox, ported to Hothouse:
 - **[BuzzBox](original-hothouse-projects/buzzbox-hothouse/)** - Aggressive fuzz with envelope filter and octave
 - **[FLUX](original-hothouse-projects/flux-hothouse/)** - Modulated slicer delay (in development)
 
+## 🚀 Starter Kit for Building Your Own Pedals
+
+New to Hothouse development? Want to build your own pedals with AI assistance?
+
+Check out the **[Starter Kit](starter-kit/)** - a comprehensive package for building Hothouse pedals using Claude AI:
+
+- 📝 **Quick Start Prompt** - Copy/paste and start building immediately
+- 🎯 **Session Templates** - Structured development with Claude Projects  
+- 📚 **API Reference** - Complete Hothouse platform documentation
+- ⚠️ **Gotcha Database** - Avoid 100+ common pitfalls
+- 📖 **Examples** - From simple tremolo to complex multi-effects
+
+**Based on real production pedals**: Venus, Mars, Earth, BuzzBox, and FLUX
+
+👉 **[Get Started →](starter-kit/README.md)**
+
 ## Quick Start
 
 ### Prerequisites

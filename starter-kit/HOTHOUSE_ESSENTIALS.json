@@ -1,0 +1,184 @@
+{
+  "platform": "Hothouse",
+  "description": "Cleveland Music Co. Hothouse - Daisy Seed Development Platform for Guitar Pedals",
+  "manufacturer": "Cleveland Music Co.",
+  "resources": {
+    "repository": "https://github.com/clevelandmusicco/HothouseExamples",
+    "web_programmer": "https://electro-smith.github.io/Programmer/",
+    "documentation": "https://electro-smith.github.io/libDaisy/",
+    "forum": "https://forum.electro-smith.com/"
+  },
+  
+  "hardware": {
+    "layout": "6 knobs, 3 toggle switches (3-position), 2 footswitches, 2 LEDs (both red)",
+    "mcu": "STM32H750 (Daisy Seed)",
+    "max_speed": "480MHz with boost",
+    "memory": "64MB SDRAM",
+    "audio": "48kHz sample rate, 32-bit float internal",
+    "io": "Mono in/out (stereo capable)"
+  },
+
+  "critical_gotchas": {
+    "1": "Toggle switches INVERTED: Physical DOWN = software 2, Physical UP = software 0",
+    "2": "hothouse.cpp MUST be in Makefile CPP_SOURCES or linking fails",
+    "3": "Both LEDs are red, not red/green like other platforms",
+    "4": "ProcessAllControls() required - single method replaces separate calls",
+    "5": "Never recreate hothouse.cpp/h - always copy from working repository",
+    "6": "fonepole() first parameter is reference: fonepole(target, input, coeff)",
+    "7": "CPU limits are real - neural networks + complex DSP can overload",
+    "8": "Clear buffers when effects off to prevent artifacts",
+    "9": "Multirate processing: increment indices AFTER use, not before",
+    "10": "Always test on hardware - simulation misses timing/CPU issues"
+  },
+
+  "required_files": {
+    "library": ["hothouse.cpp", "hothouse.h"],
+    "source_location": "Copy from HothouseExamples repository - never recreate",
+    "makefile_requirement": "Add hothouse.cpp to CPP_SOURCES line"
+  },
+
+  "code_template": {
+    "includes": [
+      "#include \"daisy_seed.h\"",
+      "#include \"daisysp.h\"",
+      "#include \"hothouse.h\"",
+      "using namespace daisy;",
+      "using namespace daisysp;",
+      "using namespace clevelandmusicco;"
+    ],
+    
+    "hardware_init": [
+      "Hothouse hw;",
+      "hw.Init(true);  // true = 480MHz boost",
+      "hw.SetAudioBlockSize(4);",
+      "hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_48KHZ);"
+    ],
+
+    "led_init": [
+      "Led led1, led2;",
+      "led1.Init(hw.seed.GetPin(Hothouse::LED_1), false);",
+      "led2.Init(hw.seed.GetPin(Hothouse::LED_2), false);"
+    ],
+
+    "control_processing": "hw.ProcessAllControls();  // Call once per audio callback"
+  },
+
+  "api_reference": {
+    "knobs": {
+      "method": "hw.GetKnobValue(Hothouse::KNOB_N)",
+      "range": "0.0 to 1.0",
+      "available": ["KNOB_1", "KNOB_2", "KNOB_3", "KNOB_4", "KNOB_5", "KNOB_6"]
+    },
+
+    "toggles": {
+      "method": "hw.GetToggleswitchPosition(Hothouse::TOGGLESWITCH_N)",
+      "returns": "0 = UP (physical), 1 = CENTER, 2 = DOWN (physical)",
+      "available": ["TOGGLESWITCH_1", "TOGGLESWITCH_2", "TOGGLESWITCH_3"],
+      "warning": "Physical positions are INVERTED from software values"
+    },
+
+    "footswitches": {
+      "pressed": "hw.switches[Hothouse::FOOTSWITCH_N].Pressed()",
+      "rising_edge": "hw.switches[Hothouse::FOOTSWITCH_N].RisingEdge()",
+      "falling_edge": "hw.switches[Hothouse::FOOTSWITCH_N].FallingEdge()",
+      "time_held": "hw.switches[Hothouse::FOOTSWITCH_N].TimeHeldMs()",
+      "available": ["FOOTSWITCH_1", "FOOTSWITCH_2"]
+    },
+
+    "leds": {
+      "set": "led1.Set(0.0f to 1.0f);",
+      "update": "led1.Update();",
+      "available": ["LED_1", "LED_2"],
+      "color": "Both LEDs are red"
+    }
+  },
+
+  "dfu_bootloader": {
+    "correct_procedure": [
+      "1. Press and hold BOOT button",
+      "2. While holding BOOT, press and release RESET button",
+      "3. Release BOOT button"
+    ],
+    "incorrect": "NOT 'Hold BOOT while connecting USB'",
+    "programming": "Use web programmer (Chrome/Edge only, Firefox incompatible)"
+  },
+
+  "typical_control_assignments": {
+    "knob_1": "Primary effect parameter (time, rate, drive, etc.)",
+    "knob_2": "Mix or level control",
+    "knob_3": "Secondary effect parameter",
+    "knob_4": "Tone or filter control",
+    "knob_5": "Modulation depth or time-based parameter",
+    "knob_6": "Feedback or modulation rate",
+    "toggle_1": "Effect mode selection",
+    "toggle_2": "Secondary mode or routing",
+    "toggle_3": "Tertiary features or presets",
+    "footswitch_1": "Bypass (latching toggle)",
+    "footswitch_2": "Momentary effect or secondary function",
+    "led_1": "Bypass indicator (on when active)",
+    "led_2": "Secondary function indicator"
+  },
+
+  "audio_callback_structure": {
+    "order": [
+      "1. hw.ProcessAllControls()",
+      "2. Read knobs/toggles/footswitches",
+      "3. Update LED states",
+      "4. Process audio (for each sample)",
+      "5. led1.Update() and led2.Update()"
+    ],
+    "sample_processing": "Process audio sample by sample in for loop",
+    "bypass_handling": "if(bypass) { output = input; } else { process }"
+  },
+
+  "common_dsp_modules": {
+    "smoothing": "fonepole(target_var, input, 0.0002f)  // target_var is float&",
+    "oscillator": "Oscillator osc; osc.Init(SR); osc.SetWaveform(); osc.SetFreq();",
+    "filter": "Tone tone; tone.Init(SR); tone.SetFreq();",
+    "delay": "DelayLine<float, MAX_SIZE> delay; delay.Init(); delay.Write(); delay.Read();",
+    "overdrive": "Overdrive od; od.Init(); od.SetDrive();",
+    "reverb": "ReverbSc verb; verb.Init(SR); verb.Process();"
+  },
+
+  "funbox_conversion": {
+    "hardware_object": "DaisyPetal hw; → Hothouse hw;",
+    "namespace": "using namespace funbox; → using namespace clevelandmusicco;",
+    "includes": "#include \"funbox.h\" → #include \"hothouse.h\"",
+    "control_processing": "hw.ProcessAnalogControls() + hw.ProcessDigitalControls() → hw.ProcessAllControls()",
+    "knobs": "hw.knob[KNOB_1].Process() → hw.GetKnobValue(Hothouse::KNOB_1)",
+    "toggles": "hw.toggle[0].Pressed() → hw.GetToggleswitchPosition(Hothouse::TOGGLESWITCH_1)",
+    "preserve_dsp": "Keep original DSP implementation EXACTLY - test before 'fixing' anything"
+  },
+
+  "build_commands": {
+    "clean": "make clean",
+    "build": "make",
+    "flash_dfu": "make program-dfu",
+    "requirements": "libDaisy and DaisySP must be built first (make in their directories)"
+  },
+
+  "debugging_tips": {
+    "volume_issues": "Check gain staging, verify bypass path, look for uninitialized buffers",
+    "cpu_overload": "Reduce block size, simplify DSP, disable features one-by-one",
+    "control_not_working": "Verify ProcessAllControls() is called, check enum names",
+    "noise_artifacts": "Clear buffers when effects off, check for uninitialized variables",
+    "timing_issues": "Test on hardware, check multirate buffer alignment"
+  },
+
+  "development_workflow": [
+    "1. Start with working hothouse.cpp/h files",
+    "2. Create basic hardware interface (controls, LEDs, bypass)",
+    "3. Add DSP modules one at a time",
+    "4. Test after each addition",
+    "5. Optimize only after everything works",
+    "6. Document control mappings clearly"
+  ],
+
+  "mode_behaviors": {
+    "GUIDED": "Ask before implementing, present plan, wait for approval, implement incrementally",
+    "EXPANSION": "Gather ALL requirements before coding, never assume, ask clarifying questions",
+    "REPLICATION": "Exact copy only, preserve all quirks, ask before fixing anything suspicious",
+    "DEBUG": "Minimal changes, fix only what's broken, test each fix incrementally",
+    "OPTIMIZATION": "Small increments, test each change, ask before major refactoring"
+  }
+}
