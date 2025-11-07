@@ -265,6 +265,19 @@ void ProcessControls() {
 void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size) {
     ProcessControls();
     
+    // Global true bypass - if no effects are active, pass clean signal
+    bool any_effect_active = fuzz_enabled || autowah_enabled || octave_enabled;
+    
+    if (!any_effect_active) {
+        // True bypass - pass input directly to output, no processing
+        for (size_t i = 0; i < size; i++) {
+            out[0][i] = in[0][i];
+            out[1][i] = in[1][i];
+        }
+        return;
+    }
+    
+    // At least one effect is active - proceed with normal processing
     for (size_t i = 0; i < size; i++) {
         float input = in[0][i];
         float signal = input;
