@@ -16,7 +16,7 @@ include $(SYSTEM_FILES_DIR)/Makefile
 OPT = -O3
 
 # Uncomment for QSPI boot (production mode - requires bootloader)
-# APP_TYPE = BOOT_QSPI
+APP_TYPE = BOOT_QSPI
 
 # Comment out for SRAM boot (development mode - no bootloader needed)
 # Leave commented for initial development

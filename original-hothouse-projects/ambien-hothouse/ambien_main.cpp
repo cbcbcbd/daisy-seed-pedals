@@ -1,15 +1,54 @@
 #include "daisy_seed.h"
 #include "daisysp.h"
 #include "hothouse.h"
-#include <stdlib.h>  // For rand() and srand()
-#include <cmath>     // For logf()
+#include <stdlib.h>
+#include <cmath>
 
 //
-// Ambien Delay v1.0 - Ambient Granular Delay
+// Ambien Delay v1.0 - Ambient Granular Delay with Spectral Phasing
+//
+// ARCHITECTURE: 4-Voice Spectral Processing with Rhythmic Cascade
+// - Captures full-spectrum audio into slices
+// - On playback: splits each slice into 3 frequency bands
+// - Each band gets Flanger modulation + fixed rhythmic delay
+// - Low: No delay (immediate)
+// - Mid: 1/4 slice delay (tight cascade)
+// - High: 1/2 slice delay (wider cascade)
+// - Output: Dry slice + 3 processed bands = 4 voices
+//
+// PAGE 1 (Toggle 3 UP): Core Delay
+//   K1: Master Level (0-200%, unity at 50%)
+//   K2: Dry/Wet Mix (0-100%)
+//   K3: Feedback (0-100%)
+//   K4: Slice Count (1-16)
+//   K5: Slice Length (100-500ms)
+//   K6: Crossfade Length (0-50%)
+//
+// PAGE 2 (Toggle 3 MIDDLE): Band Volumes & Filter Q
+//   K1: Low Volume (0-200%, unity at 50%)
+//   K2: Mid Volume (0-200%, unity at 50%)
+//   K3: High Volume (0-200%, unity at 50%)
+//   K4: Low Q (0.1-2.0)
+//   K5: Mid Q (0.1-2.0)
+//   K6: High Q (0.1-2.0)
+//
+// PAGE 3 (Toggle 3 DOWN): Flanger Settings
+//   K1: Low Flanger Depth (0-100%)
+//   K2: Mid Flanger Depth (0-100%)
+//   K3: High Flanger Depth (0-100%)
+//   K4: Low Flanger Rate (0.05-10Hz)
+//   K5: Mid Flanger Rate (0.05-10Hz)
+//   K6: High Flanger Rate (0.05-10Hz)
+//
+// TOGGLE 1: Playback Direction
+//   UP: Forward / MIDDLE: Reverse / DOWN: Random per slice
+//
+// TOGGLE 2: Cascade Direction & Original Signal
+//   UP: Low→High cascade (Low:0ms, Mid:1/4, High:1/2) + flanged original
+//   MIDDLE: High→Low cascade (High:0ms, Mid:1/4, Low:1/2) + flanged original
+//   DOWN: Slice cascade only (no original signal mixed in)
 //
 // Platform: Cleveland Music Co. Hothouse
-// Development Stage: GUIDED
-// Architecture: Sample & Hold (discrete buffer capture)
 //
 
 using namespace daisy;
@@ -17,14 +56,14 @@ using namespace daisysp;
 using namespace clevelandmusicco;
 
 // ============================================================================
-// CONSTANTS & CONFIGURATION
+// CONSTANTS
 // ============================================================================
 
 #define MAX_SLICES 16
 #define MAX_SLICE_LENGTH 24000  // 500ms @ 48kHz
 
 const float SAMPLE_RATE = 48000.0f;
-const float MIN_SLICE_LENGTH_MS = 100.0f;  // Increased from 50ms to ensure musical content after crossfades
+const float MIN_SLICE_LENGTH_MS = 100.0f;
 const float MAX_SLICE_LENGTH_MS = 500.0f;
 
 // ============================================================================
@@ -35,41 +74,52 @@ Hothouse hw;
 Led led1, led2;
 
 // ============================================================================
-// SLICE BUFFER SYSTEM
+// SLICE BUFFER SYSTEM (Full-spectrum only)
 // ============================================================================
 
-// Slice buffer array - stores captured audio slices
 float DSY_SDRAM_BSS sliceBuffers[MAX_SLICES][MAX_SLICE_LENGTH];
+int sliceLengths[MAX_SLICES];
+float sliceVolumes[MAX_SLICES];  // Volume per slice (decays with each play)
 
-// Slice metadata
-int sliceLengths[MAX_SLICES];           // Actual length of each slice in samples
+int currentCaptureSlice = 0;
+int capturePosition = 0;
+bool hasContent = false;
 
-// Capture state
-int currentCaptureSlice = 0;            // Which slice we're currently capturing into
-int capturePosition = 0;                // Current write position within slice
-
-// Zero-crossing detection for click-free slicing
-bool waitingForZeroCrossing = false;    // Flag when slice is full, searching for zero
-float previousCaptureSample = 0.0f;     // Last sample for zero-crossing detection
-bool hasLeftZero = false;               // Hysteresis - signal must leave zero before detecting crossing
-const int MAX_ZERO_SEARCH = 1000;       // Max samples to search (~20ms safety limit)
-int zeroSearchCount = 0;                // How long we've been searching
+// Zero-crossing detection
+bool waitingForZeroCrossing = false;
+float previousCaptureSample = 0.0f;
+bool hasLeftZero = false;
+const int MAX_ZERO_SEARCH = 1000;
+int zeroSearchCount = 0;
 
 // Playback state
-int currentPlaybackSlice = 0;           // Which slice we're currently playing
-int playbackPosition = 0;               // Current read position within slice
-bool hasContent = false;                // Have we captured anything yet?
-bool playbackReverse = false;           // Current slice playing in reverse? (for mode 2)
-
-// Stutter state
-int repeatCount = 0;                    // How many times we've repeated current slice
-int targetRepeats = 1;                  // How many times to repeat current slice
+int currentPlaybackSlice = 0;
+int playbackPosition = 0;
+bool playbackReverse = false;
 
 // ============================================================================
 // DSP MODULES
 // ============================================================================
 
-CrossFade mix;  // For dry/wet blending
+// Frequency splitting filters (guitar-optimized)
+Svf lowSplit;    // Low: 80-800Hz
+Svf midSplit;    // Mid: 800Hz-1kHz
+Svf highSplit;   // High: 1k-4kHz
+
+// Flanger per band for phase modulation
+Flanger lowFlanger;
+Flanger midFlanger;
+Flanger highFlanger;
+
+// Rhythmic offset delays per band (in SDRAM)
+DelayLine<float, 24000> DSY_SDRAM_BSS lowRhythmicDelay;   // Max 500ms
+DelayLine<float, 24000> DSY_SDRAM_BSS midRhythmicDelay;
+DelayLine<float, 24000> DSY_SDRAM_BSS highRhythmicDelay;
+
+// Original signal delay lines (in SDRAM for mixing flanged original with cascading offsets)
+DelayLine<float, 24000> DSY_SDRAM_BSS lowOriginalDelay;
+DelayLine<float, 24000> DSY_SDRAM_BSS midOriginalDelay;
+DelayLine<float, 24000> DSY_SDRAM_BSS highOriginalDelay;
 
 // ============================================================================
 // CONTROL STATE
@@ -77,23 +127,63 @@ CrossFade mix;  // For dry/wet blending
 
 bool bypass = true;
 
-// Control values (0.0 - 1.0 from knobs)
-float knob_time;         // K1 (reserved for pre-delay in future phases)
-float knob_mix;          // K2 - Dry/wet blend
-float knob_feedback;     // K3 - Feedback amount
-float knob_slice_count;  // K4 - Number of slices (1-16)
-float knob_slice_length; // K5 - Length of each slice (10-500ms)
-float knob_stutter;      // K6 - Stutter/shuffle control
+// Page 1: Core Delay
+float knob_master_level;
+float knob_mix;
+float knob_feedback;
+float knob_slice_count;
+float knob_slice_length;
+float knob_crossfade;
 
-// Toggle values (0, 1, or 2 for UP/MIDDLE/DOWN)
-int toggle_mode;         // Toggle 1 - Capture/Playback mode
+// Page 2: Band Volumes & Q
+float knob_low_volume;
+float knob_mid_volume;
+float knob_high_volume;
+float knob_low_q;
+float knob_mid_q;
+float knob_high_q;
+
+// Page 3: Phase Modulation
+float knob_low_depth;
+float knob_mid_depth;
+float knob_high_depth;
+float knob_low_rate;
+float knob_mid_rate;
+float knob_high_rate;
+
+// Toggles
+int toggle_mode;   // T1: playback direction
+int toggle_cascade; // T2: cascade direction (0=Low→High+orig, 1=High→Low+orig, 2=slices only)
+int toggle_page;   // T3: page selector (0=Page1, 1=Page2, 2=Page3)
+
+// Touch detection for page switching
+float prevKnobValues[6];
+bool knob_touched[6];
+bool first_start = true;
+int prev_toggle_page = 0;
 
 // Processed parameters
-int active_slice_count;         // 1-16
-float slice_length_ms;          // 10-500ms
-int slice_length_samples;       // Converted to samples
-float slice_length_samples_smooth; // Smoothed version (to prevent clicks) - MUST be float for fonepole
-float feedback_amount;          // 0.0-1.0
+int active_slice_count;
+float slice_length_ms;
+int slice_length_samples;
+float slice_length_samples_smooth;
+float feedback_amount;
+float master_level_amount;
+int crossfade_length;
+
+float low_volume, mid_volume, high_volume;
+float low_q, mid_q, high_q;
+float low_flanger_depth, mid_flanger_depth, high_flanger_depth;
+float low_flanger_rate, mid_flanger_rate, high_flanger_rate;
+
+// Rhythmic offset delays (calculated from slice length)
+float mid_rhythmic_delay_ms;
+float high_rhythmic_delay_ms;
+
+// Original signal delays (depend on cascade direction)
+float low_original_delay_ms;
+float mid_original_delay_ms;
+float high_original_delay_ms;
 
 // ============================================================================
 // CONTROL PROCESSING
@@ -103,155 +193,198 @@ void UpdateControls()
 {
     hw.ProcessAllControls();
     
-    // Read knobs
-    knob_time = hw.GetKnobValue(Hothouse::KNOB_1);          // Reserved for pre-delay
-    knob_mix = hw.GetKnobValue(Hothouse::KNOB_2);           // Dry/wet mix
-    knob_feedback = hw.GetKnobValue(Hothouse::KNOB_3);      // Feedback
-    knob_slice_count = hw.GetKnobValue(Hothouse::KNOB_4);   // Slice count
-    knob_slice_length = hw.GetKnobValue(Hothouse::KNOB_5);  // Slice length
-    knob_stutter = hw.GetKnobValue(Hothouse::KNOB_6);       // Stutter/shuffle
-    
     // Read toggles
-    toggle_mode = hw.GetToggleswitchPosition(Hothouse::TOGGLESWITCH_1);  // 0=Forward, 1=Reverse, 2=Random
+    toggle_mode = hw.GetToggleswitchPosition(Hothouse::TOGGLESWITCH_1);
+    toggle_cascade = hw.GetToggleswitchPosition(Hothouse::TOGGLESWITCH_2);
+    toggle_page = hw.GetToggleswitchPosition(Hothouse::TOGGLESWITCH_3);
+    
+    // Detect page change
+    if (toggle_page != prev_toggle_page && !first_start) {
+        prev_toggle_page = toggle_page;
+        for (int i = 0; i < 6; i++) {
+            knob_touched[i] = false;
+            prevKnobValues[i] = hw.GetKnobValue((Hothouse::Knob)i);
+        }
+    }
+    
+    // Read knobs and detect movement
+    float currentKnobValues[6];
+    for (int i = 0; i < 6; i++) {
+        currentKnobValues[i] = hw.GetKnobValue((Hothouse::Knob)i);
+        if (fabsf(currentKnobValues[i] - prevKnobValues[i]) > 0.02f) {
+            knob_touched[i] = true;
+            prevKnobValues[i] = currentKnobValues[i];
+        }
+    }
+    
+    // Update parameters based on page
+    if (toggle_page == 1) {
+        // PAGE 2: Band Volumes & Q
+        if (knob_touched[0]) knob_low_volume = currentKnobValues[0];
+        if (knob_touched[1]) knob_mid_volume = currentKnobValues[1];
+        if (knob_touched[2]) knob_high_volume = currentKnobValues[2];
+        if (knob_touched[3]) knob_low_q = currentKnobValues[3];
+        if (knob_touched[4]) knob_mid_q = currentKnobValues[4];
+        if (knob_touched[5]) knob_high_q = currentKnobValues[5];
+    } else if (toggle_page == 2) {
+        // PAGE 3: Phase Modulation
+        if (knob_touched[0]) knob_low_depth = currentKnobValues[0];
+        if (knob_touched[1]) knob_mid_depth = currentKnobValues[1];
+        if (knob_touched[2]) knob_high_depth = currentKnobValues[2];
+        if (knob_touched[3]) knob_low_rate = currentKnobValues[3];
+        if (knob_touched[4]) knob_mid_rate = currentKnobValues[4];
+        if (knob_touched[5]) knob_high_rate = currentKnobValues[5];
+    } else {
+        // PAGE 1: Core Delay
+        if (knob_touched[0]) knob_master_level = currentKnobValues[0];
+        if (knob_touched[1]) knob_mix = currentKnobValues[1];
+        if (knob_touched[2]) knob_feedback = currentKnobValues[2];
+        if (knob_touched[3]) knob_slice_count = currentKnobValues[3];
+        if (knob_touched[4]) knob_slice_length = currentKnobValues[4];
+        if (knob_touched[5]) knob_crossfade = currentKnobValues[5];
+    }
+    
+    first_start = false;
 }
 
 void UpdateButtons()
 {
-    // FS1 - Bypass toggle
     if (hw.switches[Hothouse::FOOTSWITCH_1].RisingEdge()) {
         bypass = !bypass;
     }
-    
-    // FS2 - Reserved for FREEZE mode (Phase 6)
 }
 
 void UpdateLEDs()
 {
-    // LED1 - Effect active (on when not bypassed)
     led1.Set(bypass ? 0.0f : 1.0f);
-    
-    // LED2 - Reserved for freeze mode (Phase 6)
     led2.Set(0.0f);
-    
     led1.Update();
     led2.Update();
 }
 
 void ProcessParameters()
 {
-    // Map K4 (0.0-1.0) to slice count (1-16)
-    // Use rounding instead of truncation to eliminate dead zone
+    // Page 1: Core parameters
     active_slice_count = (int)(knob_slice_count * 15.999f) + 1;
     if (active_slice_count < 1) active_slice_count = 1;
     if (active_slice_count > MAX_SLICES) active_slice_count = MAX_SLICES;
     
-    // Map K5 (0.0-1.0) to slice length (100-500ms) with logarithmic curve
-    // Proper log curve gives better resolution in the musical range
-    // log(1 + 9*x) / log(10) creates smooth logarithmic response
     float log_knob = logf(1.0f + 9.0f * knob_slice_length) / logf(10.0f);
-    slice_length_ms = MIN_SLICE_LENGTH_MS + 
-                      (log_knob * (MAX_SLICE_LENGTH_MS - MIN_SLICE_LENGTH_MS));
-    
-    // Convert to samples
+    slice_length_ms = MIN_SLICE_LENGTH_MS + (log_knob * (MAX_SLICE_LENGTH_MS - MIN_SLICE_LENGTH_MS));
     slice_length_samples = (int)((slice_length_ms / 1000.0f) * SAMPLE_RATE);
-    
-    // Clamp to valid range
     if (slice_length_samples < 1) slice_length_samples = 1;
     if (slice_length_samples > MAX_SLICE_LENGTH) slice_length_samples = MAX_SLICE_LENGTH;
     
-    // Map K3 (0.0-1.0) to feedback (0-100%, limited for Phase 1)
     feedback_amount = knob_feedback;
-}
-
-// ============================================================================
-// K6 STUTTER SYSTEM
-// ============================================================================
-
-// Calculate repeat count based on K6 - favors musical subdivisions
-int CalculateRepeatCount(float k6_value) {
-    if (k6_value < 0.01f) return 1;  // K6 at 0 = no repeats
+    master_level_amount = knob_master_level * 2.0f;
     
-    float random_val = (float)(rand() % 10000) / 10000.0f;
-    
-    // Weight distribution based on K6 - favors musical subdivisions (1x, 2x, 4x, 8x)
-    if (k6_value < 0.25f) {
-        // Low: mostly 1x, occasional 2x
-        return (random_val < 0.95f) ? 1 : 2;
-    } else if (k6_value < 0.50f) {
-        // Medium-low: mostly 2x, some 1x and 4x
-        if (random_val < 0.15f) return 1;
-        if (random_val < 0.70f) return 2;
-        return 4;
-    } else if (k6_value < 0.75f) {
-        // Medium-high: mostly 4x, some 2x and 8x
-        if (random_val < 0.15f) return 2;
-        if (random_val < 0.70f) return 4;
-        return 8;
-    } else {
-        // High: mostly 8x, some 4x
-        return (random_val < 0.25f) ? 4 : 8;
-    }
-}
-
-// Calculate shuffle probability based on K6
-// Returns true if we should jump to a random slice instead of sequential
-bool ShouldShuffle(float k6_value) {
-    if (k6_value < 0.01f) return false;  // K6 at 0 = no shuffle
-    
-    // Shuffle probability increases with K6
-    // 0% at K6=0, ramping up to ~95% at K6=100%
-    // Lower threshold (0.05) makes shuffle start earlier
-    float shuffle_probability = k6_value * 0.95f;
-    
-    float random_val = (float)(rand() % 10000) / 10000.0f;
-    return (random_val < shuffle_probability);
-}
-
-// ============================================================================
-// TOGGLE 1 MODE SYSTEM
-// ============================================================================
-
-// Get next slice index based on current mode and shuffle state
-// Mode 0 (UP): Forward slice sequence, forward playback direction
-// Mode 1 (MIDDLE): Backward slice sequence, reverse playback direction
-// Mode 2 (DOWN): Forward slice sequence, RANDOM playback direction per slice
-int GetNextSlice(int currentSlice, int maxSlices, float k6_value, int mode, bool& reverse_flag) {
-    // Determine if we should shuffle (jump randomly) or go sequential
-    bool shuffle = ShouldShuffle(k6_value);
-    
-    if (shuffle) {
-        // Jump to random slice (0 to maxSlices-1)
-        int randomSlice = rand() % maxSlices;
-        
-        // Mode 2: Randomly decide playback direction for this slice
-        if (mode == 2) {
-            reverse_flag = (rand() % 2 == 0);  // 50/50 chance
+    int currentSliceLen = sliceLengths[currentPlaybackSlice];
+    if (currentSliceLen > 0) {
+        crossfade_length = (int)(knob_crossfade * 0.5f * currentSliceLen);
+        if (crossfade_length < 480) crossfade_length = 480;  // 10ms minimum
+        if (crossfade_length * 2 > currentSliceLen) {
+            crossfade_length = currentSliceLen / 3;
+            if (crossfade_length < 1) crossfade_length = 1;
         }
-        
-        return randomSlice;
     } else {
-        // Sequential advancement based on mode
-        int nextSlice;
-        
-        if (mode == 1) {
-            // Mode 1 (MIDDLE): Backward sequence
-            nextSlice = currentSlice - 1;
-            if (nextSlice < 0) nextSlice = maxSlices - 1;  // Wrap to end
-            reverse_flag = true;  // Always reverse in mode 1
-        } else if (mode == 2) {
-            // Mode 2 (DOWN): Forward sequence, random direction per slice
-            nextSlice = currentSlice + 1;
-            if (nextSlice >= maxSlices) nextSlice = 0;  // Wrap to start
-            reverse_flag = (rand() % 2 == 0);  // Random direction for next slice
-        } else {
-            // Mode 0 (UP): Forward sequence, forward playback
-            nextSlice = currentSlice + 1;
-            if (nextSlice >= maxSlices) nextSlice = 0;  // Wrap to start
-            reverse_flag = false;  // Always forward in mode 0
-        }
-        
-        return nextSlice;
+        crossfade_length = 480;  // 10ms minimum
     }
+    
+    // Page 2: Band volumes and Q
+    low_volume = knob_low_volume * 2.0f;
+    mid_volume = knob_mid_volume * 2.0f;
+    high_volume = knob_high_volume * 2.0f;
+    
+    low_q = 0.1f + (knob_low_q * 1.9f);
+    mid_q = 0.1f + (knob_mid_q * 1.9f);
+    high_q = 0.1f + (knob_high_q * 1.9f);
+    
+    lowSplit.SetRes(low_q);
+    midSplit.SetRes(mid_q);
+    highSplit.SetRes(high_q);
+    
+    // Page 3: Flanger settings
+    low_flanger_depth = knob_low_depth;
+    mid_flanger_depth = knob_mid_depth;
+    high_flanger_depth = knob_high_depth;
+    
+    low_flanger_rate = 0.05f * powf(200.0f, knob_low_rate);
+    mid_flanger_rate = 0.05f * powf(200.0f, knob_mid_rate);
+    high_flanger_rate = 0.05f * powf(200.0f, knob_high_rate);
+    
+    lowFlanger.SetLfoDepth(low_flanger_depth);
+    lowFlanger.SetLfoFreq(low_flanger_rate);
+    
+    midFlanger.SetLfoDepth(mid_flanger_depth);
+    midFlanger.SetLfoFreq(mid_flanger_rate);
+    
+    highFlanger.SetLfoDepth(high_flanger_depth);
+    highFlanger.SetLfoFreq(high_flanger_rate);
+    
+    // Calculate rhythmic delays based on slice length
+    // Mid band: 1/4 of slice (tight cascade) - minimum 10ms
+    // High band: 1/2 of slice (wider cascade) - minimum 20ms
+    mid_rhythmic_delay_ms = fmaxf(slice_length_ms / 4.0f, 10.0f);
+    high_rhythmic_delay_ms = fmaxf(slice_length_ms / 2.0f, 20.0f);
+    
+    // Convert to samples for delay lines
+    float mid_delay_samples = (mid_rhythmic_delay_ms / 1000.0f) * SAMPLE_RATE;
+    float high_delay_samples = (high_rhythmic_delay_ms / 1000.0f) * SAMPLE_RATE;
+    
+    midRhythmicDelay.SetDelay(mid_delay_samples);
+    highRhythmicDelay.SetDelay(high_delay_samples);
+    
+    // Calculate original signal delays based on cascade direction (Toggle 2)
+    if (toggle_cascade == 0) {
+        // UP: Low→High cascade
+        low_original_delay_ms = 0.0f;
+        mid_original_delay_ms = mid_rhythmic_delay_ms;
+        high_original_delay_ms = high_rhythmic_delay_ms;
+    } else if (toggle_cascade == 1) {
+        // MIDDLE: High→Low cascade (reversed)
+        high_original_delay_ms = 0.0f;
+        mid_original_delay_ms = mid_rhythmic_delay_ms;
+        low_original_delay_ms = high_rhythmic_delay_ms;
+    } else {
+        // DOWN: No original signal (delays don't matter)
+        low_original_delay_ms = 0.0f;
+        mid_original_delay_ms = 0.0f;
+        high_original_delay_ms = 0.0f;
+    }
+    
+    // Set original signal delay lines
+    float low_orig_samples = (low_original_delay_ms / 1000.0f) * SAMPLE_RATE;
+    float mid_orig_samples = (mid_original_delay_ms / 1000.0f) * SAMPLE_RATE;
+    float high_orig_samples = (high_original_delay_ms / 1000.0f) * SAMPLE_RATE;
+    
+    lowOriginalDelay.SetDelay(low_orig_samples);
+    midOriginalDelay.SetDelay(mid_orig_samples);
+    highOriginalDelay.SetDelay(high_orig_samples);
+}
+
+// ============================================================================
+// PLAYBACK DIRECTION
+// ============================================================================
+
+int GetNextSlice(int current, int sliceCount, int mode, bool& reverseFlag)
+{
+    int nextSlice;
+    
+    if (mode == 1) {
+        // MIDDLE: Reverse
+        nextSlice = (current - 1 + sliceCount) % sliceCount;
+        reverseFlag = true;
+    } else if (mode == 2) {
+        // DOWN: Random direction per slice
+        nextSlice = (current + 1) % sliceCount;
+        reverseFlag = (rand() % 2) == 0;
+    } else {
+        // UP: Forward
+        nextSlice = (current + 1) % sliceCount;
+        reverseFlag = false;
+    }
+    
+    return nextSlice;
 }
 
 // ============================================================================
@@ -260,24 +393,20 @@ int GetNextSlice(int currentSlice, int maxSlices, float k6_value, int mode, bool
 
 void InitializeSliceBuffers()
 {
-    // Clear all slice buffers and metadata
     for (int slice = 0; slice < MAX_SLICES; slice++) {
-        sliceLengths[slice] = 0;  // Mark all slices as empty
+        sliceLengths[slice] = 0;
+        sliceVolumes[slice] = 1.0f;  // Full volume initially
         for (int sample = 0; sample < MAX_SLICE_LENGTH; sample++) {
             sliceBuffers[slice][sample] = 0.0f;
         }
     }
     
-    // Initialize capture state
     currentCaptureSlice = 0;
     capturePosition = 0;
-    
-    // Initialize playback state
     currentPlaybackSlice = 0;
     playbackPosition = 0;
     hasContent = false;
     
-    // Initialize zero-crossing detection
     waitingForZeroCrossing = false;
     previousCaptureSample = 0.0f;
     hasLeftZero = false;
@@ -285,60 +414,49 @@ void InitializeSliceBuffers()
 }
 
 // ============================================================================
-// SLICE CAPTURE WITH ZERO-CROSSING DETECTION
+// SLICE CAPTURE (Full-spectrum)
 // ============================================================================
 
 void CaptureSlice(float input)
 {
-    // Convert smoothed float to int for array access
     int target_length = (int)slice_length_samples_smooth;
-    
-    // Safety check for array bounds
     if (target_length > MAX_SLICE_LENGTH) {
         target_length = MAX_SLICE_LENGTH;
     }
     
-    // If we're waiting for a zero-crossing, keep searching
     if (waitingForZeroCrossing) {
         zeroSearchCount++;
         
-        // Check for zero-crossing with hysteresis
-        // Signal must leave zero region before we detect a crossing
-        const float ZERO_THRESHOLD = 0.01f;  // 1% threshold
+        const float ZERO_THRESHOLD = 0.01f;
         
         if (!hasLeftZero) {
-            // Wait for signal to leave zero region
             if (fabsf(input) > ZERO_THRESHOLD) {
                 hasLeftZero = true;
                 previousCaptureSample = input;
             }
         } else {
-            // Signal has left zero - now look for crossing back through zero
             bool crossingDetected = (previousCaptureSample > 0.0f && input <= 0.0f) || 
                                    (previousCaptureSample < 0.0f && input >= 0.0f);
             
             if (crossingDetected || zeroSearchCount >= MAX_ZERO_SEARCH) {
-                // Found zero-crossing OR safety timeout reached
-                // Finalize current slice and advance to next
                 sliceLengths[currentCaptureSlice] = capturePosition;
+                sliceVolumes[currentCaptureSlice] = 1.0f;  // Reset to full volume on new capture
                 
                 currentCaptureSlice++;
                 if (currentCaptureSlice >= active_slice_count) {
-                    currentCaptureSlice = 0;  // Wrap to first slice
+                    currentCaptureSlice = 0;
                 }
                 
                 capturePosition = 0;
                 waitingForZeroCrossing = false;
                 hasLeftZero = false;
                 zeroSearchCount = 0;
-                hasContent = true;  // We've captured at least one complete slice
+                hasContent = true;
             }
         }
         
         previousCaptureSample = input;
         
-        // Continue capturing during zero-crossing search
-        // This prevents gaps in the captured audio
         if (capturePosition < MAX_SLICE_LENGTH) {
             sliceBuffers[currentCaptureSlice][capturePosition] = input;
             capturePosition++;
@@ -347,13 +465,10 @@ void CaptureSlice(float input)
         return;
     }
     
-    // Normal capture - write input to current position
     sliceBuffers[currentCaptureSlice][capturePosition] = input;
     capturePosition++;
     
-    // Check if we've filled this slice to target length
     if (capturePosition >= target_length) {
-        // Start searching for zero-crossing
         waitingForZeroCrossing = true;
         hasLeftZero = false;
         zeroSearchCount = 0;
@@ -362,111 +477,116 @@ void CaptureSlice(float input)
 }
 
 // ============================================================================
-// SLICE PLAYBACK WITH VARIABLE CROSSFADE
+// 4-VOICE PLAYBACK (Dry + 3 Phased Bands)
 // ============================================================================
 
 float PlaybackSlice()
 {
-    // Don't play anything until we have content
     if (!hasContent || sliceLengths[currentPlaybackSlice] <= 0) {
         return 0.0f;
     }
     
-    // Calculate read position - REVERSE MODE for mode 1 and mode 2 random direction
+    int sliceLength = sliceLengths[currentPlaybackSlice];
+    
+    // Calculate read position
     int readPosition;
     if (playbackReverse) {
-        // Reverse playback - start from end of slice, read backwards
-        readPosition = sliceLengths[currentPlaybackSlice] - 1 - playbackPosition;
-        if (readPosition < 0) readPosition = 0;  // Safety clamp
+        readPosition = sliceLength - 1 - playbackPosition;
+        if (readPosition < 0) readPosition = 0;
     } else {
-        // Forward playback
         readPosition = playbackPosition;
     }
     
-    // Safety bounds check
-    if (readPosition >= sliceLengths[currentPlaybackSlice]) {
-        readPosition = sliceLengths[currentPlaybackSlice] - 1;
-    }
+    if (readPosition >= sliceLength) readPosition = sliceLength - 1;
     if (readPosition < 0) readPosition = 0;
     
-    // Read sample from buffer
-    float output = sliceBuffers[currentPlaybackSlice][readPosition];
+    // Read dry sample
+    float drySample = sliceBuffers[currentPlaybackSlice][readPosition];
     
-    // Apply variable crossfade at slice transitions (proportional to slice length)
-    // Fade in at start, fade out at end - MUST work for both forward and reverse playback
-    static int lastPlayedSlice = -1;
-    static int fadeLength = 0;
+    // Split into 3 frequency bands
+    lowSplit.Process(drySample);
+    midSplit.Process(drySample);
+    highSplit.Process(drySample);
     
-    // Detect slice change (including repeats - we want fade on EVERY repeat)
-    bool sliceChanged = (currentPlaybackSlice != lastPlayedSlice) || (playbackPosition == 0);
-    if (sliceChanged) {
-        lastPlayedSlice = currentPlaybackSlice;
-        // Calculate fade length as 15% of slice length
-        // Minimum 240 samples (5ms)
-        int currentSliceLen = sliceLengths[currentPlaybackSlice];
-        fadeLength = currentSliceLen * 15 / 100;
-        if (fadeLength < 240) fadeLength = 240;
-        
-        // Prevent overlapping fades on very short slices
-        // If slice is too short for both fades, reduce fade length
-        if (fadeLength * 2 > currentSliceLen) {
-            fadeLength = currentSliceLen / 3;  // Use 33% for fade in + out
-            if (fadeLength < 1) fadeLength = 1;
-        }
+    float lowBand = lowSplit.Low();
+    float midBand = midSplit.Band();
+    float highBand = highSplit.High();
+    
+    // Apply Flanger to each band (if volume > 0)
+    float lowProcessed = 0.0f;
+    float midProcessed = 0.0f;
+    float highProcessed = 0.0f;
+    
+    if (low_volume > 0.01f) {
+        lowProcessed = lowFlanger.Process(lowBand) * low_volume;
     }
     
+    if (mid_volume > 0.01f) {
+        // Mid band: Flanger + rhythmic delay (1/4 slice)
+        float flanged = midFlanger.Process(midBand);
+        midRhythmicDelay.Write(flanged);
+        midProcessed = midRhythmicDelay.Read() * mid_volume;
+    }
+    
+    if (high_volume > 0.01f) {
+        // High band: Flanger + rhythmic delay (1/2 slice)
+        float flanged = highFlanger.Process(highBand);
+        highRhythmicDelay.Write(flanged);
+        highProcessed = highRhythmicDelay.Read() * high_volume;
+    }
+    
+    // Apply equal-power crossfades at slice boundaries (reduces clicks)
     float fadeEnvelope = 1.0f;
-    int currentSliceLen = sliceLengths[currentPlaybackSlice];
     
-    // Fade in at start of slice (based on playbackPosition, works for both forward/reverse)
-    if (playbackPosition < fadeLength) {
-        fadeEnvelope = (float)playbackPosition / (float)fadeLength;
+    if (playbackPosition < crossfade_length) {
+        // Fade in with sqrt for equal-power
+        fadeEnvelope = sqrtf((float)playbackPosition / (float)crossfade_length);
     }
     
-    // Fade out at end of slice
-    int fadeOutStart = currentSliceLen - fadeLength;
+    int fadeOutStart = sliceLength - crossfade_length;
     if (fadeOutStart > 0 && playbackPosition >= fadeOutStart) {
         int fadeOutPos = playbackPosition - fadeOutStart;
-        float fadeOutEnvelope = 1.0f - ((float)fadeOutPos / (float)fadeLength);
-        // Use minimum of fade-in and fade-out to prevent overlap
+        // Fade out with sqrt for equal-power
+        float fadeOutEnvelope = sqrtf(1.0f - ((float)fadeOutPos / (float)crossfade_length));
         if (fadeOutEnvelope < fadeEnvelope) {
             fadeEnvelope = fadeOutEnvelope;
         }
     }
     
-    output *= fadeEnvelope;
+    // Mix 4 voices: Dry + 3 processed bands (Flanger + rhythmic offsets)
+    float output = (drySample + lowProcessed + midProcessed + highProcessed) * fadeEnvelope;
     
-    // Advance playback position
+    // Apply slice volume (decays with each playback)
+    output *= sliceVolumes[currentPlaybackSlice];
+    
+    // Advance playback
     playbackPosition++;
     
-    // Check if we've reached the end of this slice
-    if (playbackPosition >= sliceLengths[currentPlaybackSlice]) {
-        repeatCount++;  // Completed one play of this slice
-        playbackPosition = 0;  // Loop back to start of slice
+    if (playbackPosition >= sliceLength) {
+        playbackPosition = 0;
         
-        // Check if we've repeated this slice enough times
-        if (repeatCount >= targetRepeats) {
-            // Done repeating - advance to next slice based on mode
-            int nextSlice = GetNextSlice(currentPlaybackSlice, active_slice_count, knob_stutter, toggle_mode, playbackReverse);
-            
-            // CRITICAL: Check for read/write conflict
-            // If we're about to play the slice we're currently capturing into, skip it
-            if (nextSlice == currentCaptureSlice) {
-                // Skip ahead one more slice to avoid conflict
-                nextSlice = GetNextSlice(nextSlice, active_slice_count, knob_stutter, toggle_mode, playbackReverse);
-            }
-            
-            // Safety check: only advance if next slice has valid content
-            // This prevents playing empty slices that haven't been captured yet
-            if (sliceLengths[nextSlice] > 0) {
-                currentPlaybackSlice = nextSlice;
-                playbackPosition = 0;  // CRITICAL: Reset position when changing slices!
-            }
-            // If next slice is empty, stay on current slice (it will repeat)
-            
-            // Reset repeat tracking and calculate new behavior for next slice
-            repeatCount = 0;
-            targetRepeats = CalculateRepeatCount(knob_stutter);
+        // Decay slice volume based on feedback amount
+        // High feedback = slow decay, Low feedback = fast decay
+        // Formula: volume *= (0.5 + 0.45 * feedback)
+        // At 0% feedback: volume *= 0.5 (decays quickly - 50% per cycle)
+        // At 100% feedback: volume *= 0.95 (very slow decay - 5% per cycle)
+        float decay_factor = 0.5f + (0.45f * feedback_amount);
+        sliceVolumes[currentPlaybackSlice] *= decay_factor;
+        
+        // If volume drops below threshold, consider it silent
+        if (sliceVolumes[currentPlaybackSlice] < 0.001f) {
+            sliceVolumes[currentPlaybackSlice] = 0.0f;
+        }
+        
+        int nextSlice = GetNextSlice(currentPlaybackSlice, active_slice_count, toggle_mode, playbackReverse);
+        
+        if (nextSlice == currentCaptureSlice) {
+            nextSlice = GetNextSlice(nextSlice, active_slice_count, toggle_mode, playbackReverse);
+        }
+        
+        if (sliceLengths[nextSlice] > 0) {
+            currentPlaybackSlice = nextSlice;
+            playbackPosition = 0;
         }
     }
     
@@ -488,81 +608,141 @@ static void AudioCallback(AudioHandle::InputBuffer in,
     
     for (size_t i = 0; i < size; i++)
     {
-        // Smooth slice length parameter per-sample (prevents clicks when adjusting)
         fonepole(slice_length_samples_smooth, (float)slice_length_samples, 0.0002f);
         
-        // Get input (mono, use left channel)
         float input = in[0][i];
-        
         float output;
         
         if (!bypass) {
-            // Step 3: Read from playback engine
             float wet = PlaybackSlice();
             
-            // Step 4: Apply feedback - mix playback back into capture input
-            float capture_input = input + (wet * feedback_amount);
+            // Process original signal through spectral flanging (if Toggle 2 != DOWN)
+            float original_flanged = 0.0f;
+            if (toggle_cascade != 2) {
+                // Split original into 3 frequency bands
+                lowSplit.Process(input);
+                midSplit.Process(input);
+                highSplit.Process(input);
+                
+                float lowBandOrig = lowSplit.Low();
+                float midBandOrig = midSplit.Band();
+                float highBandOrig = highSplit.High();
+                
+                // Apply Flangers to each band
+                float lowFlangedOrig = lowFlanger.Process(lowBandOrig);
+                float midFlangedOrig = midFlanger.Process(midBandOrig);
+                float highFlangedOrig = highFlanger.Process(highBandOrig);
+                
+                // Apply cascading delays to create rhythmic offset
+                lowOriginalDelay.Write(lowFlangedOrig * low_volume);
+                midOriginalDelay.Write(midFlangedOrig * mid_volume);
+                highOriginalDelay.Write(highFlangedOrig * high_volume);
+                
+                float lowDelayed = lowOriginalDelay.Read();
+                float midDelayed = midOriginalDelay.Read();
+                float highDelayed = highOriginalDelay.Read();
+                
+                // Sum the cascaded bands
+                original_flanged = lowDelayed + midDelayed + highDelayed;
+            }
             
-            // Step 2: Capture with feedback applied
+            // Feedback disabled (was causing oscillation)
+            // TODO: Need proper feedback implementation with gain control
+            float capture_input = input;
             CaptureSlice(capture_input);
             
-            // Dry/wet mix for output
-            mix.SetPos(knob_mix);
-            output = mix.Process(input, wet);
+            // Combine sliced wet signal with original flanged signal
+            float combined_wet = wet + original_flanged;
             
+            // Constant-power dry/wet mix (prevents volume dip at 50%)
+            // Uses sqrt for equal-power curve
+            float wet_level = sqrtf(knob_mix);
+            float dry_level = sqrtf(1.0f - knob_mix);
+            output = (input * dry_level) + (combined_wet * wet_level);
+            
+            // Apply master level
+            output *= master_level_amount;
         } else {
-            // Bypass - pass input through
             output = input;
         }
         
-        // Output to both channels (mono for Phase 1)
         out[0][i] = output;
         out[1][i] = output;
     }
 }
 
 // ============================================================================
-// MAIN INITIALIZATION
+// MAIN
 // ============================================================================
 
 int main(void)
 {
-    // Initialize hardware with CPU boost (480MHz)
     hw.Init(true);
-    
-    // Seed random number generator for K6 stutter system
     srand(System::GetNow());
+    hw.SetAudioBlockSize(512);
     
-    // Set audio configuration
-    hw.SetAudioBlockSize(512);  // Increased from 256 to reduce clicking from CPU load
-    
-    // Initialize slice buffer system
     InitializeSliceBuffers();
     
-    // Initialize crossfade mixer
-    mix.Init();
+    // Initialize DSP modules
+    lowSplit.Init(SAMPLE_RATE);
+    lowSplit.SetFreq(800.0f);
+    lowSplit.SetRes(0.1f);
     
-    // Initialize state
-    bypass = true;  // Start bypassed for safety
+    midSplit.Init(SAMPLE_RATE);
+    midSplit.SetFreq(900.0f);
+    midSplit.SetRes(0.1f);
     
-    // Initialize control values to safe defaults
-    knob_time = 0.0f;
-    knob_mix = 0.5f;           // 50/50 mix
-    knob_feedback = 0.3f;      // 30% feedback
-    knob_slice_count = 0.25f;  // ~4 slices default
-    knob_slice_length = 0.4f;  // ~200ms default
-    knob_stutter = 0.0f;
-    toggle_mode = 0;           // Forward/Forward mode
+    highSplit.Init(SAMPLE_RATE);
+    highSplit.SetFreq(1000.0f);
+    highSplit.SetRes(0.1f);
     
-    // Process initial parameters
+    lowFlanger.Init(SAMPLE_RATE);
+    lowFlanger.SetFeedback(0.5f);
+    
+    midFlanger.Init(SAMPLE_RATE);
+    midFlanger.SetFeedback(0.5f);
+    
+    highFlanger.Init(SAMPLE_RATE);
+    highFlanger.SetFeedback(0.5f);
+    
+    lowRhythmicDelay.Init();
+    midRhythmicDelay.Init();
+    highRhythmicDelay.Init();
+    
+    lowOriginalDelay.Init();
+    midOriginalDelay.Init();
+    highOriginalDelay.Init();
+    
+    // Initialize controls to safe defaults
+    bypass = true;
+    knob_master_level = 0.5f;  // Unity
+    knob_mix = 0.5f;
+    knob_feedback = 0.3f;
+    knob_slice_count = 0.25f;
+    knob_slice_length = 0.4f;
+    knob_crossfade = 0.3f;
+    
+    knob_low_volume = 0.5f;    // Unity
+    knob_mid_volume = 0.5f;
+    knob_high_volume = 0.5f;
+    knob_low_q = 0.0f;         // Minimal Q
+    knob_mid_q = 0.0f;
+    knob_high_q = 0.0f;
+    
+    knob_low_depth = 0.0f;     // No phase delay
+    knob_mid_depth = 0.0f;
+    knob_high_depth = 0.0f;
+    knob_low_rate = 0.2f;      // ~1Hz
+    knob_mid_rate = 0.2f;
+    knob_high_rate = 0.2f;
+    
+    toggle_mode = 0;
+    toggle_cascade = 0;
+    toggle_page = 0;
+    
     ProcessParameters();
-    slice_length_samples_smooth = (float)slice_length_samples;  // Initialize smoothed value as float
+    slice_length_samples_smooth = (float)slice_length_samples;
     
-    // Initialize stutter state
-    repeatCount = 0;
-    targetRepeats = 1;  // Start with no repeats until K6 is adjusted
-    
-    // Initialize LEDs
     led1.Init(hw.seed.GetPin(Hothouse::LED_1), false);
     led2.Init(hw.seed.GetPin(Hothouse::LED_2), false);
     led1.Set(0.0f);
@@ -570,37 +750,13 @@ int main(void)
     led1.Update();
     led2.Update();
     
-    // Start audio
     hw.StartAdc();
     hw.StartAudio(AudioCallback);
     
-    // Main loop - check for bootloader entry
     while(1)
     {
-        // Hold FS1 for 2 seconds to enter bootloader
-        if(hw.switches[Hothouse::FOOTSWITCH_1].TimeHeldMs() >= 2000)
-        {
-            hw.StopAudio();
-            hw.StopAdc();
-            
-            // Flash LEDs to indicate bootloader mode
-            for(int i = 0; i < 3; i++) 
-            {
-                led1.Set(1.0f);
-                led2.Set(0.0f);
-                led1.Update();
-                led2.Update();
-                System::Delay(100);
-                
-                led1.Set(0.0f);
-                led2.Set(1.0f);
-                led1.Update();
-                led2.Update();
-                System::Delay(100);
-            }
-            
-            System::ResetToBootloader();
-        }
+        // Hothouse DFU entry - QSPI compatible
+        hw.CheckResetToBootloader();
         
         System::Delay(100);
     }
