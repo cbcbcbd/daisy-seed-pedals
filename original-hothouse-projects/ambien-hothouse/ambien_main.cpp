@@ -7,14 +7,13 @@
 //
 // Ambien Delay v1.0 - Ambient Granular Delay with Spectral Phasing
 //
-// ARCHITECTURE: 4-Voice Spectral Processing with Rhythmic Cascade
-// - Captures full-spectrum audio into slices
-// - On playback: splits each slice into 3 frequency bands
-// - Each band gets Flanger modulation + fixed rhythmic delay
-// - Low: No delay (immediate)
-// - Mid: 1/4 slice delay (tight cascade)
-// - High: 1/2 slice delay (wider cascade)
-// - Output: Dry slice + 3 processed bands = 4 voices
+// ARCHITECTURE: Spectral Flanging with Rhythmic Cascade
+// - Input split into 3 frequency bands → Flanged → Summed
+// - Processed signal captured into slices (flanging "baked in")
+// - Slices play back with decay (already contain flanged audio)
+// - Original signal gets cascading delays for rhythmic offset
+// - Low: Immediate / Mid: 1/4 slice delay / High: 1/2 slice delay
+// - Toggle 2 controls cascade direction (Low→High, High→Low, or slices only)
 //
 // PAGE 1 (Toggle 3 UP): Core Delay
 //   K1: Master Level (0-200%, unity at 50%)
@@ -47,6 +46,9 @@
 //   UP: Low→High cascade (Low:0ms, Mid:1/4, High:1/2) + flanged original
 //   MIDDLE: High→Low cascade (High:0ms, Mid:1/4, Low:1/2) + flanged original
 //   DOWN: Slice cascade only (no original signal mixed in)
+//
+// FOOTSWITCH 1 (FS1): Toggle Slicer (on/off)
+// FOOTSWITCH 2 (FS2): Toggle Spectral Flanger (on/off)
 //
 // Platform: Cleveland Music Co. Hothouse
 //
@@ -111,12 +113,7 @@ Flanger lowFlanger;
 Flanger midFlanger;
 Flanger highFlanger;
 
-// Rhythmic offset delays per band (in SDRAM)
-DelayLine<float, 24000> DSY_SDRAM_BSS lowRhythmicDelay;   // Max 500ms
-DelayLine<float, 24000> DSY_SDRAM_BSS midRhythmicDelay;
-DelayLine<float, 24000> DSY_SDRAM_BSS highRhythmicDelay;
-
-// Original signal delay lines (in SDRAM for mixing flanged original with cascading offsets)
+// Rhythmic offset delays for original signal (in SDRAM)
 DelayLine<float, 24000> DSY_SDRAM_BSS lowOriginalDelay;
 DelayLine<float, 24000> DSY_SDRAM_BSS midOriginalDelay;
 DelayLine<float, 24000> DSY_SDRAM_BSS highOriginalDelay;
@@ -126,6 +123,8 @@ DelayLine<float, 24000> DSY_SDRAM_BSS highOriginalDelay;
 // ============================================================================
 
 bool bypass = true;
+bool slicer_enabled = true;     // FS1: Slicer on/off
+bool flanger_enabled = true;    // FS2: Spectral flanger on/off
 
 // Page 1: Core Delay
 float knob_master_level;
@@ -175,10 +174,6 @@ float low_volume, mid_volume, high_volume;
 float low_q, mid_q, high_q;
 float low_flanger_depth, mid_flanger_depth, high_flanger_depth;
 float low_flanger_rate, mid_flanger_rate, high_flanger_rate;
-
-// Rhythmic offset delays (calculated from slice length)
-float mid_rhythmic_delay_ms;
-float high_rhythmic_delay_ms;
 
 // Original signal delays (depend on cascade direction)
 float low_original_delay_ms;
@@ -250,14 +245,18 @@ void UpdateControls()
 void UpdateButtons()
 {
     if (hw.switches[Hothouse::FOOTSWITCH_1].RisingEdge()) {
-        bypass = !bypass;
+        slicer_enabled = !slicer_enabled;
+    }
+    
+    if (hw.switches[Hothouse::FOOTSWITCH_2].RisingEdge()) {
+        flanger_enabled = !flanger_enabled;
     }
 }
 
 void UpdateLEDs()
 {
-    led1.Set(bypass ? 0.0f : 1.0f);
-    led2.Set(0.0f);
+    led1.Set(slicer_enabled ? 1.0f : 0.0f);   // LED1: Slicer status
+    led2.Set(flanger_enabled ? 1.0f : 0.0f);  // LED2: Flanger status
     led1.Update();
     led2.Update();
 }
@@ -321,30 +320,21 @@ void ProcessParameters()
     highFlanger.SetLfoDepth(high_flanger_depth);
     highFlanger.SetLfoFreq(high_flanger_rate);
     
-    // Calculate rhythmic delays based on slice length
-    // Mid band: 1/4 of slice (tight cascade) - minimum 10ms
-    // High band: 1/2 of slice (wider cascade) - minimum 20ms
-    mid_rhythmic_delay_ms = fmaxf(slice_length_ms / 4.0f, 10.0f);
-    high_rhythmic_delay_ms = fmaxf(slice_length_ms / 2.0f, 20.0f);
+    // Calculate original signal delays based on slice length
+    float mid_delay_ms = fmaxf(slice_length_ms / 4.0f, 10.0f);
+    float high_delay_ms = fmaxf(slice_length_ms / 2.0f, 20.0f);
     
-    // Convert to samples for delay lines
-    float mid_delay_samples = (mid_rhythmic_delay_ms / 1000.0f) * SAMPLE_RATE;
-    float high_delay_samples = (high_rhythmic_delay_ms / 1000.0f) * SAMPLE_RATE;
-    
-    midRhythmicDelay.SetDelay(mid_delay_samples);
-    highRhythmicDelay.SetDelay(high_delay_samples);
-    
-    // Calculate original signal delays based on cascade direction (Toggle 2)
+    // Set delays based on cascade direction (Toggle 2)
     if (toggle_cascade == 0) {
         // UP: Low→High cascade
         low_original_delay_ms = 0.0f;
-        mid_original_delay_ms = mid_rhythmic_delay_ms;
-        high_original_delay_ms = high_rhythmic_delay_ms;
+        mid_original_delay_ms = mid_delay_ms;
+        high_original_delay_ms = high_delay_ms;
     } else if (toggle_cascade == 1) {
         // MIDDLE: High→Low cascade (reversed)
         high_original_delay_ms = 0.0f;
-        mid_original_delay_ms = mid_rhythmic_delay_ms;
-        low_original_delay_ms = high_rhythmic_delay_ms;
+        mid_original_delay_ms = mid_delay_ms;
+        low_original_delay_ms = high_delay_ms;
     } else {
         // DOWN: No original signal (delays don't matter)
         low_original_delay_ms = 0.0f;
@@ -500,52 +490,21 @@ float PlaybackSlice()
     if (readPosition >= sliceLength) readPosition = sliceLength - 1;
     if (readPosition < 0) readPosition = 0;
     
-    // Read dry sample
-    float drySample = sliceBuffers[currentPlaybackSlice][readPosition];
-    
-    // Split into 3 frequency bands
-    lowSplit.Process(drySample);
-    midSplit.Process(drySample);
-    highSplit.Process(drySample);
-    
-    float lowBand = lowSplit.Low();
-    float midBand = midSplit.Band();
-    float highBand = highSplit.High();
-    
-    // Apply Flanger to each band (if volume > 0)
-    float lowProcessed = 0.0f;
-    float midProcessed = 0.0f;
-    float highProcessed = 0.0f;
-    
-    if (low_volume > 0.01f) {
-        lowProcessed = lowFlanger.Process(lowBand) * low_volume;
-    }
-    
-    if (mid_volume > 0.01f) {
-        // Mid band: Flanger + rhythmic delay (1/4 slice)
-        float flanged = midFlanger.Process(midBand);
-        midRhythmicDelay.Write(flanged);
-        midProcessed = midRhythmicDelay.Read() * mid_volume;
-    }
-    
-    if (high_volume > 0.01f) {
-        // High band: Flanger + rhythmic delay (1/2 slice)
-        float flanged = highFlanger.Process(highBand);
-        highRhythmicDelay.Write(flanged);
-        highProcessed = highRhythmicDelay.Read() * high_volume;
-    }
+    // Read sample from buffer (already filtered+flanged during capture)
+    float sample = sliceBuffers[currentPlaybackSlice][readPosition];
     
     // Apply equal-power crossfades at slice boundaries (reduces clicks)
+    // Use readPosition for fade calculations so they work correctly in reverse
     float fadeEnvelope = 1.0f;
     
-    if (playbackPosition < crossfade_length) {
+    if (readPosition < crossfade_length) {
         // Fade in with sqrt for equal-power
-        fadeEnvelope = sqrtf((float)playbackPosition / (float)crossfade_length);
+        fadeEnvelope = sqrtf((float)readPosition / (float)crossfade_length);
     }
     
     int fadeOutStart = sliceLength - crossfade_length;
-    if (fadeOutStart > 0 && playbackPosition >= fadeOutStart) {
-        int fadeOutPos = playbackPosition - fadeOutStart;
+    if (fadeOutStart > 0 && readPosition >= fadeOutStart) {
+        int fadeOutPos = readPosition - fadeOutStart;
         // Fade out with sqrt for equal-power
         float fadeOutEnvelope = sqrtf(1.0f - ((float)fadeOutPos / (float)crossfade_length));
         if (fadeOutEnvelope < fadeEnvelope) {
@@ -553,11 +512,8 @@ float PlaybackSlice()
         }
     }
     
-    // Mix 4 voices: Dry + 3 processed bands (Flanger + rhythmic offsets)
-    float output = (drySample + lowProcessed + midProcessed + highProcessed) * fadeEnvelope;
-    
-    // Apply slice volume (decays with each playback)
-    output *= sliceVolumes[currentPlaybackSlice];
+    // Apply crossfade envelope and slice volume
+    float output = sample * fadeEnvelope * sliceVolumes[currentPlaybackSlice];
     
     // Advance playback
     playbackPosition++;
@@ -613,58 +569,75 @@ static void AudioCallback(AudioHandle::InputBuffer in,
         float input = in[0][i];
         float output;
         
-        if (!bypass) {
-            float wet = PlaybackSlice();
+        // Start with clean input
+        float processedSignal = input;
+        float flangedSignal = input;
+        
+        // STAGE 1: Spectral Flanger (if FS2 enabled)
+        float lowBand = 0.0f;
+        float midBand = 0.0f;
+        float highBand = 0.0f;
+        
+        if (flanger_enabled) {
+            // Split input into 3 frequency bands
+            lowSplit.Process(input);
+            midSplit.Process(input);
+            highSplit.Process(input);
             
-            // Process original signal through spectral flanging (if Toggle 2 != DOWN)
-            float original_flanged = 0.0f;
-            if (toggle_cascade != 2) {
-                // Split original into 3 frequency bands
-                lowSplit.Process(input);
-                midSplit.Process(input);
-                highSplit.Process(input);
-                
-                float lowBandOrig = lowSplit.Low();
-                float midBandOrig = midSplit.Band();
-                float highBandOrig = highSplit.High();
-                
-                // Apply Flangers to each band
-                float lowFlangedOrig = lowFlanger.Process(lowBandOrig);
-                float midFlangedOrig = midFlanger.Process(midBandOrig);
-                float highFlangedOrig = highFlanger.Process(highBandOrig);
-                
-                // Apply cascading delays to create rhythmic offset
-                lowOriginalDelay.Write(lowFlangedOrig * low_volume);
-                midOriginalDelay.Write(midFlangedOrig * mid_volume);
-                highOriginalDelay.Write(highFlangedOrig * high_volume);
-                
-                float lowDelayed = lowOriginalDelay.Read();
-                float midDelayed = midOriginalDelay.Read();
-                float highDelayed = highOriginalDelay.Read();
-                
-                // Sum the cascaded bands
-                original_flanged = lowDelayed + midDelayed + highDelayed;
-            }
+            lowBand = lowSplit.Low();
+            midBand = midSplit.Band();
+            highBand = highSplit.High();
             
-            // Feedback disabled (was causing oscillation)
-            // TODO: Need proper feedback implementation with gain control
-            float capture_input = input;
-            CaptureSlice(capture_input);
+            // Apply Flangers to each band
+            float lowFlanged = lowFlanger.Process(lowBand);
+            float midFlanged = midFlanger.Process(midBand);
+            float highFlanged = highFlanger.Process(highBand);
             
-            // Combine sliced wet signal with original flanged signal
-            float combined_wet = wet + original_flanged;
-            
-            // Constant-power dry/wet mix (prevents volume dip at 50%)
-            // Uses sqrt for equal-power curve
-            float wet_level = sqrtf(knob_mix);
-            float dry_level = sqrtf(1.0f - knob_mix);
-            output = (input * dry_level) + (combined_wet * wet_level);
-            
-            // Apply master level
-            output *= master_level_amount;
-        } else {
-            output = input;
+            // Sum the flanged bands
+            flangedSignal = lowFlanged + midFlanged + highFlanged;
+            processedSignal = flangedSignal;
         }
+        
+        // STAGE 2: Slicer - Capture (only if FS1 enabled)
+        if (slicer_enabled) {
+            CaptureSlice(processedSignal);
+        }
+        
+        // STAGE 3: Slicer - Playback (if FS1 enabled)
+        float sliced = 0.0f;
+        if (slicer_enabled) {
+            sliced = PlaybackSlice();
+        }
+        
+        // STAGE 4: Original signal with cascading delays (COMMENTED OUT FOR TESTING)
+        float original_cascaded = 0.0f;
+        /*
+        if (toggle_cascade != 2 && flanger_enabled) {
+            // Use the flanged bands we already calculated
+            lowOriginalDelay.Write(lowFlanger.Process(lowBand) * low_volume);
+            midOriginalDelay.Write(midFlanger.Process(midBand) * mid_volume);
+            highOriginalDelay.Write(highFlanger.Process(highBand) * high_volume);
+            
+            float lowDelayed = lowOriginalDelay.Read();
+            float midDelayed = midOriginalDelay.Read();
+            float highDelayed = highOriginalDelay.Read();
+            
+            original_cascaded = lowDelayed + midDelayed + highDelayed;
+        }
+        */
+        
+        // STAGE 5: Combine everything
+        // If slicer is off, use the flanged signal directly
+        float wet_signal = slicer_enabled ? sliced : flangedSignal;
+        float combined_wet = wet_signal + original_cascaded;
+        
+        // STAGE 6: Dry/wet mix
+        float wet_level = sqrtf(knob_mix);
+        float dry_level = sqrtf(1.0f - knob_mix);
+        output = (input * dry_level) + (combined_wet * wet_level);
+        
+        // STAGE 7: Master level
+        output *= master_level_amount;
         
         out[0][i] = output;
         out[1][i] = output;
@@ -697,17 +670,13 @@ int main(void)
     highSplit.SetRes(0.1f);
     
     lowFlanger.Init(SAMPLE_RATE);
-    lowFlanger.SetFeedback(0.5f);
+    lowFlanger.SetFeedback(0.7f);  // Increased for more depth
     
     midFlanger.Init(SAMPLE_RATE);
-    midFlanger.SetFeedback(0.5f);
+    midFlanger.SetFeedback(0.7f);  // Increased for more depth
     
     highFlanger.Init(SAMPLE_RATE);
-    highFlanger.SetFeedback(0.5f);
-    
-    lowRhythmicDelay.Init();
-    midRhythmicDelay.Init();
-    highRhythmicDelay.Init();
+    highFlanger.SetFeedback(0.7f);  // Increased for more depth
     
     lowOriginalDelay.Init();
     midOriginalDelay.Init();
@@ -715,6 +684,8 @@ int main(void)
     
     // Initialize controls to safe defaults
     bypass = true;
+    slicer_enabled = true;
+    flanger_enabled = true;
     knob_master_level = 0.5f;  // Unity
     knob_mix = 0.5f;
     knob_feedback = 0.3f;
