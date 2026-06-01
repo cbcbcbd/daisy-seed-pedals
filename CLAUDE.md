@@ -67,7 +67,7 @@ make program-boot       # install bootloader first (QSPI projects, one-time)
 
 **Build failures:** check Makefile `TARGET` matches filename → `CPP_SOURCES` includes `hothouse.cpp` → include paths for RTNeural/Eigen if neural → enum names against the Hothouse reference.
 
-**Binary release:** see `.claude/rules/release.md`. <!-- provisional: confirm release reference file name during repo setup -->
+**Binary release:** see `docs/release-notes.md` (workflow not finalized yet).
 
 ## Notes on tooling
 Claude Code's auto-memory, checkpoints (rewind), and compaction now handle session continuity, lesson capture, and context — no manual handoff, token-tracking, or snapshot process needed.
